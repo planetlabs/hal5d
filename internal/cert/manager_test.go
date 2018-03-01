@@ -1,0 +1,508 @@
+package cert
+
+import (
+	"bytes"
+	"path/filepath"
+	"reflect"
+	"testing"
+
+	"github.com/negz/hal5d/internal/kubernetes"
+
+	"github.com/go-test/deep"
+	"github.com/pkg/errors"
+	"github.com/spf13/afero"
+	"k8s.io/api/core/v1"
+	"k8s.io/api/extensions/v1beta1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+var (
+	coolIngress = &v1beta1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "coolIngress"},
+		Spec:       v1beta1.IngressSpec{TLS: []v1beta1.IngressTLS{{SecretName: coolSecret.GetName()}}},
+	}
+	coolSecret = &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "coolSecret"},
+		Data: map[string][]byte{
+			v1.TLSCertKey:       []byte("cert"),
+			v1.TLSPrivateKeyKey: []byte("key"),
+		},
+	}
+	coolSecretWithoutCert = &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "coolSecret"},
+		Data: map[string][]byte{
+			v1.TLSPrivateKeyKey: []byte("key"),
+		},
+	}
+	coolSecretWithoutKey = &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "coolSecret"},
+		Data: map[string][]byte{
+			v1.TLSCertKey: []byte("cert"),
+		},
+	}
+	dankSecret = &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "dankSecret"},
+		Data: map[string][]byte{
+			v1.TLSCertKey:       []byte("dankcert"),
+			v1.TLSPrivateKeyKey: []byte("dankkey"),
+		},
+	}
+)
+
+func TestNewCertPair(t *testing.T) {
+	cases := []struct {
+		name     string
+		filename string
+		want     certPair
+		wantErr  bool
+	}{
+		{
+			name:     "ValidFilename",
+			filename: "ns-ingress-secret.pem",
+			want:     certPair{Namespace: "ns", IngressName: "ingress", SecretName: "secret"},
+		},
+		{
+			name:     "InvalidSuffix",
+			filename: "ns-ingress-secret.crt",
+			wantErr:  true,
+		},
+		{
+			name:     "InvalidParts",
+			filename: "ingress-secret.pem",
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := newCertPair(tc.filename)
+			if err != nil {
+				if tc.wantErr {
+					return
+				}
+				t.Errorf("newCertPair(%v): %v", tc.filename, err)
+			}
+			if diff := deep.Equal(tc.want, got); diff != nil {
+				t.Errorf("newCertPair(%v): want != got %v", tc.filename, diff)
+			}
+		})
+	}
+}
+
+type pessimisticValidator struct{}
+
+func (v *pessimisticValidator) Validate() error {
+	return errors.New("this config sucks")
+}
+
+type testSubscriber struct {
+	notified int
+}
+
+func (s *testSubscriber) Changed() {
+	s.notified++
+}
+
+func populate(t *testing.T, fs afero.Fs, files map[string][]byte) string {
+	dir, err := afero.TempDir(fs, "/", "tls")
+	if err != nil {
+		t.Fatalf("cannot make temp dir: %v", err)
+	}
+	for name, data := range files {
+		path := filepath.Join(dir, name)
+		if err := afero.WriteFile(fs, path, data, 0600); err != nil {
+			t.Fatalf("cannot write file :%v", err)
+		}
+	}
+	return dir
+}
+
+func validate(t *testing.T, fs afero.Fs, dir string, wantFile map[string][]byte) {
+	fi, err := afero.ReadDir(fs, dir)
+	if err != nil {
+		t.Fatalf("cannot list TLS cert pairs: %v", err)
+	}
+	seen := make(map[string]bool)
+	for _, f := range fi {
+		seen[f.Name()] = true
+		want, ok := wantFile[f.Name()]
+		if !ok {
+			t.Errorf("found unwanted file: %v", f.Name())
+		}
+		got, err := afero.ReadFile(fs, filepath.Join(dir, f.Name()))
+		if err != nil {
+			t.Errorf("cannot read file: %v", err)
+		}
+		if !bytes.Equal(want, got) {
+			t.Errorf("%v: want content '%s', got '%s'", f.Name(), want, got)
+		}
+	}
+
+	for f := range wantFile {
+		if !seen[f] {
+			t.Errorf("did not find wanted file: %v", f)
+		}
+	}
+}
+
+type mapSecretStore map[metadata]*v1.Secret
+
+func (m mapSecretStore) Get(namespace, name string) (*v1.Secret, error) {
+	md := metadata{Namespace: namespace, Name: name}
+	s, ok := m[md]
+	if !ok {
+		return nil, errors.New("no such secret")
+	}
+	return s, nil
+}
+
+func TestUpsertIngress(t *testing.T) {
+	cases := []struct {
+		name     string
+		i        *v1beta1.Ingress
+		s        kubernetes.SecretStore
+		v        Validator
+		existing map[string][]byte
+		want     map[string][]byte
+	}{
+		{
+			name: "AddToEmptyDir",
+			i:    coolIngress,
+			s: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			},
+			v: &optimisticValidator{},
+			want: map[string][]byte{
+				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+			},
+		},
+		{
+			name: "AddToPopulatedDir",
+			i:    coolIngress,
+			s: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			},
+			v: &optimisticValidator{},
+			existing: map[string][]byte{
+				"ns-anotherIngress-existingSecret.pem":     []byte("certkey2"),
+				"dankCert.pem":                             []byte("sodank"),
+				"anotherns-coolIngress-existingSecret.pem": []byte("certkey3"),
+			},
+			want: map[string][]byte{
+				"ns-anotherIngress-existingSecret.pem":     []byte("certkey2"),
+				"ns-coolIngress-coolSecret.pem":            []byte("certkey"),
+				"dankCert.pem":                             []byte("sodank"),
+				"anotherns-coolIngress-existingSecret.pem": []byte("certkey3"),
+			},
+		},
+		{
+			name: "CertRemovedFromIngress",
+			i:    coolIngress,
+			s: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			},
+			v: &optimisticValidator{},
+			existing: map[string][]byte{
+				"ns-coolIngress-existingSecret.pem": []byte("certkey1"),
+			},
+			want: map[string][]byte{
+				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+			},
+		},
+		{
+			name: "OverwriteExistingCert",
+			i:    coolIngress,
+			s: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			},
+			v: &optimisticValidator{},
+			existing: map[string][]byte{
+				"ns-coolIngress-coolSecret.pem": []byte("suchcertverykey"),
+			},
+			want: map[string][]byte{
+				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+			},
+		},
+		{
+			name: "UnchangedExistingCert",
+			i:    coolIngress,
+			s: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			},
+			v: &optimisticValidator{},
+			existing: map[string][]byte{
+				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+			},
+			want: map[string][]byte{
+				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+			},
+		},
+		{
+			name: "MissingSecret",
+			i:    coolIngress,
+			s:    mapSecretStore{},
+			v:    &optimisticValidator{},
+		},
+		{
+			name: "MissingSecretCert",
+			i:    coolIngress,
+			s: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecretWithoutCert,
+			},
+			v: &optimisticValidator{},
+		},
+		{
+			name: "MissingSecretKey",
+			i:    coolIngress,
+			s: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecretWithoutKey,
+			},
+			v: &optimisticValidator{},
+		},
+		{
+			name: "ValidationFails",
+			i:    coolIngress,
+			s: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			},
+			v: &pessimisticValidator{},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+			dir := populate(t, fs, tc.existing)
+
+			sub := &testSubscriber{}
+			m, err := NewManager(dir, tc.s, WithFilesystem(fs), WithValidator(tc.v), WithSubscriber(sub))
+			if err != nil {
+				t.Fatalf("NewManager(...): %v", err)
+			}
+
+			m.OnUpdate(&v1beta1.Ingress{}, tc.i)
+			got, want := sub.notified == 1, !reflect.DeepEqual(tc.existing, tc.want)
+			if got != want {
+				t.Errorf("m.OnAdd(...): changed directory content: want %v, got %v", want, got)
+			}
+			validate(t, fs, dir, tc.want)
+		})
+	}
+}
+
+func TestUpsertSecret(t *testing.T) {
+	cases := []struct {
+		name        string
+		i           *v1beta1.Ingress
+		s           *v1.Secret
+		st          kubernetes.SecretStore
+		v           Validator
+		want        map[string][]byte
+		wantChanges int
+	}{
+		{
+			name: "AddSecretAfterIngress",
+			i:    coolIngress,
+			s:    coolSecret,
+			st:   mapSecretStore{},
+			v:    &optimisticValidator{},
+			want: map[string][]byte{
+				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+			},
+			wantChanges: 1,
+		},
+		{
+			name: "SecretDataUpdated",
+			i:    coolIngress,
+			s:    coolSecret,
+			st: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: &v1.Secret{
+					ObjectMeta: metav1.ObjectMeta{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()},
+					Data: map[string][]byte{
+						v1.TLSCertKey:       []byte("oldcert"),
+						v1.TLSPrivateKeyKey: []byte("oldkey"),
+					},
+				},
+			},
+			v: &optimisticValidator{},
+			want: map[string][]byte{
+				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+			},
+			wantChanges: 2,
+		},
+		{
+			name: "SecretDataUnchanged",
+			i:    coolIngress,
+			s:    coolSecret,
+			st: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			},
+			v: &optimisticValidator{},
+			want: map[string][]byte{
+				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+			},
+			wantChanges: 1,
+		},
+		{
+			name:        "SecretDataMissingCert",
+			i:           coolIngress,
+			s:           coolSecretWithoutCert,
+			st:          mapSecretStore{},
+			v:           &optimisticValidator{},
+			wantChanges: 0,
+		},
+		{
+			name:        "SecretDataMissingKey",
+			i:           coolIngress,
+			s:           coolSecretWithoutKey,
+			st:          mapSecretStore{},
+			v:           &optimisticValidator{},
+			wantChanges: 0,
+		},
+		{
+			name:        "ValidationFails",
+			i:           coolIngress,
+			s:           coolSecret,
+			st:          mapSecretStore{},
+			v:           &pessimisticValidator{},
+			wantChanges: 0,
+		},
+		{
+			name: "UnreferencedSecret",
+			i:    coolIngress,
+			s:    dankSecret,
+			st: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			},
+			v: &optimisticValidator{},
+			want: map[string][]byte{
+				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+			},
+			wantChanges: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+			dir := populate(t, fs, nil)
+
+			sub := &testSubscriber{}
+			m, err := NewManager(dir, tc.st, WithFilesystem(fs), WithValidator(tc.v), WithSubscriber(sub))
+			if err != nil {
+				t.Fatalf("NewManager(...): %v", err)
+			}
+
+			m.OnAdd(tc.i)
+			m.OnAdd(tc.s)
+			got, want := sub.notified, tc.wantChanges
+			if got != want {
+				t.Errorf("m.OnAdd(...): changed directory content: want %v changes, got %v", want, got)
+			}
+			validate(t, fs, dir, tc.want)
+		})
+	}
+}
+
+func TestDeleteIngress(t *testing.T) {
+	cases := []struct {
+		name     string
+		i        *v1beta1.Ingress
+		s        kubernetes.SecretStore
+		existing map[string][]byte
+		want     map[string][]byte
+	}{
+		{
+			name: "DeleteOnlyIngress",
+			i:    coolIngress,
+			existing: map[string][]byte{
+				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+				"ns-coolIngress-dankSecret.pem": []byte("anothercertanotherkey"),
+			},
+		},
+		{
+			name: "DeleteUnknownIngress",
+			i:    coolIngress,
+			existing: map[string][]byte{
+				"anotherns-coolIngress-coolSecret.pem": []byte("certkey"),
+			},
+			want: map[string][]byte{
+				"anotherns-coolIngress-coolSecret.pem": []byte("certkey"),
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+			dir := populate(t, fs, tc.existing)
+
+			sub := &testSubscriber{}
+			m, err := NewManager(dir, tc.s, WithFilesystem(fs), WithSubscriber(sub))
+			if err != nil {
+				t.Fatalf("NewManager(...): %v", err)
+			}
+
+			m.OnDelete(tc.i)
+			got, want := sub.notified == 1, !reflect.DeepEqual(tc.existing, tc.want)
+			if got != want {
+				t.Errorf("m.OnDelete(...): changed directory content: want %v, got %v", want, got)
+			}
+			validate(t, fs, dir, tc.want)
+		})
+	}
+}
+
+func TestDeleteSecret(t *testing.T) {
+	cases := []struct {
+		name        string
+		i           *v1beta1.Ingress
+		s           *v1.Secret
+		st          kubernetes.SecretStore
+		want        map[string][]byte
+		wantChanges int
+	}{
+		{
+			name: "DeleteSecret",
+			i:    coolIngress,
+			s:    coolSecret,
+			st: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			},
+			wantChanges: 2,
+		},
+		{
+			name: "DeleteSecret",
+			i:    coolIngress,
+			s:    dankSecret,
+			st: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			},
+			want: map[string][]byte{
+				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+			},
+			wantChanges: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+			dir := populate(t, fs, nil)
+
+			sub := &testSubscriber{}
+			m, err := NewManager(dir, tc.st, WithFilesystem(fs), WithSubscriber(sub))
+			if err != nil {
+				t.Fatalf("NewManager(...): %v", err)
+			}
+
+			m.OnAdd(tc.i)
+			m.OnDelete(tc.s)
+			got, want := sub.notified, tc.wantChanges
+			if got != want {
+				t.Errorf("m.OnDelete(...): changed directory content: want %v changes, got %v", want, got)
+			}
+			validate(t, fs, dir, tc.want)
+		})
+	}
+}
