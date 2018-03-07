@@ -76,11 +76,11 @@ func main() {
 	kingpin.FatalIfError(await(sync, ingresses, secrets), "error watching Kubernetes")
 }
 
-type runnable interface {
+type runner interface {
 	Run(stop <-chan struct{})
 }
 
-func await(rs ...runnable) error {
+func await(rs ...runner) error {
 	stop := make(chan struct{})
 	g := &run.Group{}
 	for i := range rs {
