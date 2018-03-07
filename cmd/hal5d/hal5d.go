@@ -83,7 +83,8 @@ type runnable interface {
 func await(rs ...runnable) error {
 	stop := make(chan struct{})
 	g := &run.Group{}
-	for _, r := range rs {
+	for i := range rs {
+		r := rs[i] // https://github.com/golang/go/wiki/CommonMistakes#using-goroutines-on-loop-iterator-variables
 		g.Add(func() error { r.Run(stop); return nil }, func(err error) { close(stop) })
 	}
 	return g.Run()
