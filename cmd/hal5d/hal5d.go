@@ -76,14 +76,15 @@ func main() {
 	kingpin.FatalIfError(await(sync, ingresses, secrets), "error watching Kubernetes")
 }
 
-type runnable interface {
+type runner interface {
 	Run(stop <-chan struct{})
 }
 
-func await(rs ...runnable) error {
+func await(rs ...runner) error {
 	stop := make(chan struct{})
 	g := &run.Group{}
-	for _, r := range rs {
+	for i := range rs {
+		r := rs[i] // https://golang.org/doc/faq#closures_and_goroutines
 		g.Add(func() error { r.Run(stop); return nil }, func(err error) { close(stop) })
 	}
 	return g.Run()
