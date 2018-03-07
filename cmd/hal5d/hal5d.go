@@ -84,7 +84,7 @@ func await(rs ...runner) error {
 	stop := make(chan struct{})
 	g := &run.Group{}
 	for i := range rs {
-		r := rs[i] // https://github.com/golang/go/wiki/CommonMistakes#using-goroutines-on-loop-iterator-variables
+		r := rs[i] // https://golang.org/doc/faq#closures_and_goroutines
 		g.Add(func() error { r.Run(stop); return nil }, func(err error) { close(stop) })
 	}
 	return g.Run()
