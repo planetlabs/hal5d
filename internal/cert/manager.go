@@ -197,6 +197,7 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 	log := m.log.With(
 		zap.String("namespace", i.GetNamespace()),
 		zap.String("ingress name", i.GetName()))
+	log.Debug("processing ingress upsert")
 
 	existing, err := m.existing(i.GetNamespace(), i.GetName())
 	if err != nil {
@@ -206,60 +207,56 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 	changed := false
 	keep := make(map[certPair]bool)
 	for _, tls := range i.Spec.TLS {
+		log := log.With(zap.String("secret name", tls.SecretName)) //nolint:vetshadow
 		m.secretRefs.Add(i.GetNamespace(), i.GetName(), tls.SecretName)
 		s, err := m.secretStore.Get(i.GetNamespace(), tls.SecretName)
 		if err != nil {
-			log.Info("cannot get TLS secret",
-				zap.String("secret name", tls.SecretName),
-				zap.Error(err))
+			log.Info("cannot get TLS secret", zap.Error(err))
 			continue
 		}
+		log.Debug("found secret")
 
 		cert, ok := s.Data[v1.TLSCertKey]
 		if !ok {
-			log.Info("missing certificate",
-				zap.String("secret name", s.GetName()),
-				zap.String("secret key", v1.TLSCertKey))
+			log.Info("missing certificate", zap.String("secret key", v1.TLSCertKey))
 			continue
 		}
 		key, ok := s.Data[v1.TLSPrivateKeyKey]
 		if !ok {
-			log.Info("missing private key",
-				zap.String("secret name", s.GetName()),
-				zap.String("secret key", v1.TLSPrivateKeyKey))
+			log.Info("missing private key", zap.String("secret key", v1.TLSPrivateKeyKey))
 			continue
 		}
 
 		cp := certPair{Namespace: i.GetNamespace(), IngressName: i.GetName(), SecretName: s.GetName()}
 		cd := certData{certPair: cp, Cert: cert, Key: key}
 		if existing[cp] && !m.changed(cd) {
-			log.Debug("cert pair unchanged", zap.String("secret name", tls.SecretName))
+			log.Debug("cert pair unchanged")
 			keep[cp] = true
 			continue
 		}
 		if err := m.write(cd); err != nil {
-			log.Error("cannot write cert pair",
-				zap.String("secret name", tls.SecretName),
-				zap.Error(err))
+			log.Error("cannot write cert pair", zap.Error(err))
 			continue
 		}
 		keep[cp] = true
 		changed = true
+		log.Debug("wrote cert pair")
 	}
 
 	for cp := range existing {
 		if keep[cp] {
 			continue
 		}
+		log := log.With(zap.String("secret name", cp.SecretName)) //nolint:vetshadow
+		log.Debug("deleting stale cert pair")
 		path := filepath.Join(m.tlsDir, cp.Filename())
 		if err := m.fs.Remove(path); err != nil {
-			log.Error("cannot remove stale cert pair",
-				zap.String("secret name", cp.SecretName),
-				zap.Error(err))
+			log.Error("cannot remove stale cert pair", zap.Error(err))
 			continue
 		}
 		m.secretRefs.Delete(i.GetNamespace(), i.GetName(), cp.SecretName)
 		changed = true
+		log.Debug("deleted cert pair")
 	}
 
 	return changed
@@ -324,37 +321,34 @@ func (m *Manager) upsertSecret(s *v1.Secret) bool {
 	log := m.log.With(
 		zap.String("namespace", s.GetNamespace()),
 		zap.String("secret name", s.GetName()))
+	log.Debug("processing secret upsert")
 
 	changed := false
 	for ingressName := range m.secretRefs.Get(s.GetNamespace(), s.GetName()) {
+		log := log.With(zap.String("ingress name", ingressName)) // nolint:vetshadow
 		cert, ok := s.Data[v1.TLSCertKey]
 		if !ok {
-			m.log.Info("missing TLS certificate",
-				zap.String("ingress name", ingressName),
-				zap.String("secret key", v1.TLSCertKey))
+			m.log.Info("missing TLS certificate", zap.String("secret key", v1.TLSCertKey))
 			continue
 		}
 		key, ok := s.Data[v1.TLSPrivateKeyKey]
 		if !ok {
-			m.log.Info("missing TLS private key",
-				zap.String("ingress name", ingressName),
-				zap.String("secret key", v1.TLSPrivateKeyKey))
+			m.log.Info("missing TLS private key", zap.String("secret key", v1.TLSPrivateKeyKey))
 			continue
 		}
 
 		cp := certPair{Namespace: s.GetNamespace(), IngressName: ingressName, SecretName: s.GetName()}
 		cd := certData{certPair: cp, Cert: cert, Key: key}
 		if !m.changed(cd) {
-			log.Debug("cert pair unchanged", zap.String("ingress name", ingressName))
+			log.Debug("cert pair unchanged")
 			continue
 		}
 		if err := m.write(cd); err != nil {
-			log.Error("cannot write cert pair",
-				zap.String("ingress name", ingressName),
-				zap.Error(err))
+			log.Error("cannot write cert pair", zap.Error(err))
 			continue
 		}
 		changed = true
+		log.Debug("wrote cert pair")
 	}
 
 	return changed
@@ -364,6 +358,7 @@ func (m *Manager) deleteIngress(i *v1beta1.Ingress) bool {
 	log := m.log.With(
 		zap.String("namespace", i.GetNamespace()),
 		zap.String("ingress name", i.GetName()))
+	log.Debug("processing ingress delete")
 
 	changed := false
 	existing, err := m.existing(i.GetNamespace(), i.GetName())
@@ -371,15 +366,15 @@ func (m *Manager) deleteIngress(i *v1beta1.Ingress) bool {
 		log.Error("cannot get existing cert pairs - stale cert pairs will not be reaped")
 	}
 	for cp := range existing {
+		log := log.With(zap.String("secret name", cp.SecretName)) //nolint:vetshadow
 		path := filepath.Join(m.tlsDir, cp.Filename())
 		if err := m.fs.Remove(path); err != nil {
-			log.Error("cannot remove stale cert pair",
-				zap.String("secret name", cp.SecretName),
-				zap.Error(err))
+			log.Error("cannot remove stale cert pair", zap.Error(err))
 			continue
 		}
 		m.secretRefs.Delete(i.GetNamespace(), i.GetName(), cp.SecretName)
 		changed = true
+		log.Debug("deleted cert pair")
 	}
 
 	return changed
@@ -389,19 +384,20 @@ func (m *Manager) deleteSecret(s *v1.Secret) bool {
 	log := m.log.With(
 		zap.String("namespace", s.GetNamespace()),
 		zap.String("secret name", s.GetName()))
+	log.Debug("processing secret delete")
 
 	changed := false
 	for ingressName := range m.secretRefs.Get(s.GetNamespace(), s.GetName()) {
 		cp := certPair{Namespace: s.GetNamespace(), IngressName: ingressName, SecretName: s.GetName()}
+		log := log.With(zap.String("ingress name", cp.IngressName)) //nolint:vetshadow
 		path := filepath.Join(m.tlsDir, cp.Filename())
 		if err := m.fs.Remove(path); err != nil {
-			log.Error("cannot remove stale TLS certpair",
-				zap.String("secret name", cp.SecretName),
-				zap.Error(err))
+			log.Error("cannot remove stale TLS certpair", zap.Error(err))
 			continue
 		}
 		m.secretRefs.Delete(s.GetNamespace(), ingressName, s.GetName())
 		changed = true
+		log.Debug("deleted cert pair")
 	}
 
 	return changed
