@@ -37,7 +37,7 @@ func main() {
 		kubecfg   = app.Flag("kubeconfig", "Path to kubeconfig file. Leave unset to use in-cluster config.").String()
 		apiserver = app.Flag("master", "Address of Kubernetes API server. Leave unset to use in-cluster config.").String()
 		vURL      = app.Flag("validate-url", "Webhook URL used to validate haproxy configuration.").Default(defaultWebhookURLValidate).String()
-		rURL      = app.Flag("reload-url", "Webhook URL used to reload haproxy configuration.").Default(defaultWebhookURLValidate).String()
+		rURL      = app.Flag("reload-url", "Webhook URL used to reload haproxy configuration.").Default(defaultWebhookURLReload).String()
 	)
 
 	kingpin.MustParse(app.Parse(os.Args[1:]))
