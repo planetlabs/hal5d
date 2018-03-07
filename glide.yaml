@@ -1,0 +1,30 @@
+package: github.com/negz/hal5d
+import:
+- package: github.com/oklog/run
+  version: v1.0.0
+- package: github.com/pkg/errors
+  version: v0.8.0
+- package: github.com/spf13/afero
+  version: v1.0.2
+- package: go.uber.org/zap
+  version: v1.7.1
+- package: gopkg.in/alecthomas/kingpin.v2
+  version: v2.2.6
+- package: k8s.io/api
+  subpackages:
+  - core/v1
+  - extensions/v1beta1
+- package: k8s.io/apimachinery
+  subpackages:
+  - pkg/fields
+- package: k8s.io/client-go
+  version: v6.0.0
+  subpackages:
+  - kubernetes
+  - rest
+  - tools/cache
+  - tools/clientcmd
+  - tools/clientcmd/api
+testImport:
+- package: github.com/go-test/deep
+  version: v1.0.1
