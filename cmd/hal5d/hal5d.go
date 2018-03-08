@@ -48,6 +48,7 @@ func main() {
 		log, err = zap.NewDevelopment()
 	}
 	kingpin.FatalIfError(err, "cannot create log")
+	defer log.Sync()
 
 	c, err := buildConfigFromFlags(*apiserver, *kubecfg)
 	kingpin.FatalIfError(err, "cannot create Kubernetes client configuration")
