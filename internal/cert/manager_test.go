@@ -506,3 +506,43 @@ func TestDeleteSecret(t *testing.T) {
 		})
 	}
 }
+
+func TestUpsertDeleteUpsertSecret(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	dir := populate(t, fs, nil)
+
+	sub := &testSubscriber{}
+	m, err := NewManager(dir, mapSecretStore{}, WithFilesystem(fs), WithSubscriber(sub))
+	if err != nil {
+		t.Fatalf("NewManager(...): %v", err)
+	}
+
+	m.OnAdd(coolIngress)
+	m.OnAdd(coolSecret)
+	m.OnDelete(coolSecret)
+	m.OnAdd(coolSecret)
+	validate(t, fs, dir, map[string][]byte{
+		"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+	})
+}
+
+func TestUpsertDeleteUpsertIngress(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	dir := populate(t, fs, nil)
+
+	st := mapSecretStore{
+		metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+	}
+	sub := &testSubscriber{}
+	m, err := NewManager(dir, st, WithFilesystem(fs), WithSubscriber(sub))
+	if err != nil {
+		t.Fatalf("NewManager(...): %v", err)
+	}
+
+	m.OnAdd(coolIngress)
+	m.OnDelete(coolIngress)
+	m.OnAdd(coolIngress)
+	validate(t, fs, dir, map[string][]byte{
+		"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+	})
+}
