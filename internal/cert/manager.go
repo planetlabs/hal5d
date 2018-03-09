@@ -395,7 +395,6 @@ func (m *Manager) deleteSecret(s *v1.Secret) bool {
 			log.Error("cannot remove stale TLS certpair", zap.Error(err))
 			continue
 		}
-		m.secretRefs.Delete(s.GetNamespace(), ingressName, s.GetName())
 		changed = true
 		log.Debug("deleted cert pair")
 	}
