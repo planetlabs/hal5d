@@ -8,12 +8,30 @@ import (
 	"strings"
 
 	"github.com/negz/hal5d/internal/kubernetes"
+	"github.com/negz/hal5d/internal/metrics"
 
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/afero"
 	"go.uber.org/zap"
 	"k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
+)
+
+// Labels used by metrics and logs.
+const (
+	LabelNamespace    = "namespace"
+	LabelIngressName  = "ingress_name"
+	LabelSecretName   = "secret_name"
+	LabelErrorContext = "context"
+)
+
+// Error contexts used as metric labels.
+const (
+	ErrorContextUpsertIngress = "upsert_ingress"
+	ErrorContextUpsertSecret  = "upsert_secret"
+	ErrorContextDeleteIngress = "delete_ingress"
+	ErrorContextDeleteSecret  = "delete_secret"
 )
 
 const (
@@ -79,23 +97,39 @@ type Validator interface {
 	Validate() error
 }
 
-// A Subscriber is notified synchronously every time the cert pairs change.
-type Subscriber interface {
-	// Changed is called every time the managed certificates change.
-	Changed()
-}
-
 type optimisticValidator struct{}
 
 func (v *optimisticValidator) Validate() error {
 	return nil
 }
 
+// A Subscriber is notified synchronously every time the cert pairs change.
+type Subscriber interface {
+	// Changed is called every time the managed certificates change.
+	Changed()
+}
+
+// Metrics that may be exposed by a certificate manager.
+type Metrics struct {
+	Writes  metrics.CounterVec
+	Deletes metrics.CounterVec
+	Errors  metrics.CounterVec
+}
+
+func newNopMetrics() Metrics {
+	return Metrics{
+		Writes:  &metrics.NopCounterVec{},
+		Deletes: &metrics.NopCounterVec{},
+		Errors:  &metrics.NopCounterVec{},
+	}
+}
+
 // A Manager persists ingress TLS cert pairs to disk. Manager implements
 // cache.ResourceEventHandler in order to consume notifications about
 type Manager struct {
-	log *zap.Logger
-	fs  afero.Fs
+	log    *zap.Logger
+	metric Metrics
+	fs     afero.Fs
 
 	tlsDir      string
 	v           Validator
@@ -111,6 +145,14 @@ type ManagerOption func(*Manager) error
 func WithLogger(l *zap.Logger) ManagerOption {
 	return func(m *Manager) error {
 		m.log = l
+		return nil
+	}
+}
+
+// WithMetrics configures a certificate manager's metrics.
+func WithMetrics(mx Metrics) ManagerOption {
+	return func(m *Manager) error {
+		m.metric = mx
 		return nil
 	}
 }
@@ -145,6 +187,7 @@ func WithSubscriber(s Subscriber) ManagerOption {
 func NewManager(dir string, s kubernetes.SecretStore, o ...ManagerOption) (*Manager, error) {
 	m := &Manager{
 		log:         zap.NewNop(),
+		metric:      newNopMetrics(),
 		fs:          afero.NewOsFs(),
 		tlsDir:      dir,
 		v:           &optimisticValidator{},
@@ -195,22 +238,26 @@ func (m *Manager) OnDelete(obj interface{}) {
 
 func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 	log := m.log.With(
-		zap.String("namespace", i.GetNamespace()),
-		zap.String("ingress name", i.GetName()))
+		zap.String(LabelNamespace, i.GetNamespace()),
+		zap.String(LabelIngressName, i.GetName()))
 	log.Debug("processing ingress upsert")
 
 	existing, err := m.existing(i.GetNamespace(), i.GetName())
 	if err != nil {
 		log.Error("cannot get existing cert pairs - stale cert pairs will not be reaped")
+		m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextUpsertIngress}).Inc()
 	}
 
 	changed := false
 	keep := make(map[certPair]bool)
 	for _, tls := range i.Spec.TLS {
-		log := log.With(zap.String("secret name", tls.SecretName)) //nolint:vetshadow
+		log := log.With(zap.String(LabelSecretName, tls.SecretName)) //nolint:vetshadow
 		m.secretRefs.Add(i.GetNamespace(), i.GetName(), tls.SecretName)
 		s, err := m.secretStore.Get(i.GetNamespace(), tls.SecretName)
 		if err != nil {
+			// This error is indicative of user misconfiguration, i.e. an
+			// ingress referencing a TLS secret that does not yet exist. We log
+			// it informationally, and do not emit an error metric.
 			log.Info("cannot get TLS secret", zap.Error(err))
 			continue
 		}
@@ -236,10 +283,16 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 		}
 		if err := m.write(cd); err != nil {
 			log.Error("cannot write cert pair", zap.Error(err))
+			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextUpsertIngress}).Inc()
 			continue
 		}
 		keep[cp] = true
 		changed = true
+		m.metric.Writes.With(prometheus.Labels{
+			LabelNamespace:   i.GetNamespace(),
+			LabelIngressName: i.GetName(),
+			LabelSecretName:  s.GetName(),
+		}).Inc()
 		log.Debug("wrote cert pair")
 	}
 
@@ -247,15 +300,21 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 		if keep[cp] {
 			continue
 		}
-		log := log.With(zap.String("secret name", cp.SecretName)) //nolint:vetshadow
+		log := log.With(zap.String(LabelSecretName, cp.SecretName)) //nolint:vetshadow
 		log.Debug("deleting stale cert pair")
 		path := filepath.Join(m.tlsDir, cp.Filename())
 		if err := m.fs.Remove(path); err != nil {
 			log.Error("cannot remove stale cert pair", zap.Error(err))
+			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextUpsertIngress}).Inc()
 			continue
 		}
 		m.secretRefs.Delete(i.GetNamespace(), i.GetName(), cp.SecretName)
 		changed = true
+		m.metric.Deletes.With(prometheus.Labels{
+			LabelNamespace:   i.GetNamespace(),
+			LabelIngressName: i.GetName(),
+			LabelSecretName:  cp.SecretName,
+		}).Inc()
 		log.Debug("deleted cert pair")
 	}
 
@@ -319,13 +378,13 @@ func (m *Manager) write(c certData) error {
 
 func (m *Manager) upsertSecret(s *v1.Secret) bool {
 	log := m.log.With(
-		zap.String("namespace", s.GetNamespace()),
-		zap.String("secret name", s.GetName()))
+		zap.String(LabelNamespace, s.GetNamespace()),
+		zap.String(LabelSecretName, s.GetName()))
 	log.Debug("processing secret upsert")
 
 	changed := false
 	for ingressName := range m.secretRefs.Get(s.GetNamespace(), s.GetName()) {
-		log := log.With(zap.String("ingress name", ingressName)) // nolint:vetshadow
+		log := log.With(zap.String(LabelIngressName, ingressName)) // nolint:vetshadow
 		cert, ok := s.Data[v1.TLSCertKey]
 		if !ok {
 			m.log.Info("missing TLS certificate", zap.String("secret key", v1.TLSCertKey))
@@ -345,9 +404,15 @@ func (m *Manager) upsertSecret(s *v1.Secret) bool {
 		}
 		if err := m.write(cd); err != nil {
 			log.Error("cannot write cert pair", zap.Error(err))
+			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextUpsertSecret}).Inc()
 			continue
 		}
 		changed = true
+		m.metric.Writes.With(prometheus.Labels{
+			LabelNamespace:   s.GetNamespace(),
+			LabelIngressName: ingressName,
+			LabelSecretName:  s.GetName(),
+		}).Inc()
 		log.Debug("wrote cert pair")
 	}
 
@@ -356,8 +421,8 @@ func (m *Manager) upsertSecret(s *v1.Secret) bool {
 
 func (m *Manager) deleteIngress(i *v1beta1.Ingress) bool {
 	log := m.log.With(
-		zap.String("namespace", i.GetNamespace()),
-		zap.String("ingress name", i.GetName()))
+		zap.String(LabelNamespace, i.GetNamespace()),
+		zap.String(LabelIngressName, i.GetName()))
 	log.Debug("processing ingress delete")
 
 	changed := false
@@ -366,14 +431,20 @@ func (m *Manager) deleteIngress(i *v1beta1.Ingress) bool {
 		log.Error("cannot get existing cert pairs - stale cert pairs will not be reaped")
 	}
 	for cp := range existing {
-		log := log.With(zap.String("secret name", cp.SecretName)) //nolint:vetshadow
+		log := log.With(zap.String(LabelSecretName, cp.SecretName)) //nolint:vetshadow
 		path := filepath.Join(m.tlsDir, cp.Filename())
 		if err := m.fs.Remove(path); err != nil {
 			log.Error("cannot remove stale cert pair", zap.Error(err))
+			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextDeleteIngress}).Inc()
 			continue
 		}
 		m.secretRefs.Delete(i.GetNamespace(), i.GetName(), cp.SecretName)
 		changed = true
+		m.metric.Deletes.With(prometheus.Labels{
+			LabelNamespace:   i.GetNamespace(),
+			LabelIngressName: i.GetName(),
+			LabelSecretName:  cp.SecretName,
+		}).Inc()
 		log.Debug("deleted cert pair")
 	}
 
@@ -382,21 +453,27 @@ func (m *Manager) deleteIngress(i *v1beta1.Ingress) bool {
 
 func (m *Manager) deleteSecret(s *v1.Secret) bool {
 	log := m.log.With(
-		zap.String("namespace", s.GetNamespace()),
-		zap.String("secret name", s.GetName()))
+		zap.String(LabelNamespace, s.GetNamespace()),
+		zap.String(LabelSecretName, s.GetName()))
 	log.Debug("processing secret delete")
 
 	changed := false
 	for ingressName := range m.secretRefs.Get(s.GetNamespace(), s.GetName()) {
 		cp := certPair{Namespace: s.GetNamespace(), IngressName: ingressName, SecretName: s.GetName()}
-		log := log.With(zap.String("ingress name", cp.IngressName)) //nolint:vetshadow
+		log := log.With(zap.String(LabelIngressName, cp.IngressName)) //nolint:vetshadow
 		path := filepath.Join(m.tlsDir, cp.Filename())
 		if err := m.fs.Remove(path); err != nil {
 			log.Error("cannot remove stale TLS certpair", zap.Error(err))
+			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextDeleteSecret}).Inc()
 			continue
 		}
 		changed = true
 		log.Debug("deleted cert pair")
+		m.metric.Deletes.With(prometheus.Labels{
+			LabelNamespace:   s.GetNamespace(),
+			LabelIngressName: ingressName,
+			LabelSecretName:  s.GetName(),
+		}).Inc()
 	}
 
 	return changed

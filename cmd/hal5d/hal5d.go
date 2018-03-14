@@ -1,11 +1,17 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/julienschmidt/httprouter"
 	"github.com/oklog/run"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/afero"
 	"go.uber.org/zap"
 	"gopkg.in/alecthomas/kingpin.v2"
@@ -25,8 +31,11 @@ import (
 const (
 	defaultWebhookURLValidate = "http://localhost:15000/validate"
 	defaultWebhookURLReload   = "http://localhost:15000/reload"
+)
 
-	syncEventBuffer = 128
+const (
+	prometheusNamespace = "hal5d"
+	syncEventBuffer     = 128
 )
 
 func main() {
@@ -38,10 +47,38 @@ func main() {
 		apiserver = app.Flag("master", "Address of Kubernetes API server. Leave unset to use in-cluster config.").String()
 		vURL      = app.Flag("validate-url", "Webhook URL used to validate haproxy configuration.").Default(defaultWebhookURLValidate).String()
 		rURL      = app.Flag("reload-url", "Webhook URL used to reload haproxy configuration.").Default(defaultWebhookURLReload).String()
+		listen    = app.Flag("listen", "Address at which to expose /metrics and /healthz.").Default(":10002").String()
 	)
-
 	kingpin.MustParse(app.Parse(os.Args[1:]))
 	glogWorkaround()
+
+	var (
+		writes = prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: prometheusNamespace,
+				Name:      "certpair_writes_total",
+				Help:      "Total certificate pairs written to disk.",
+			},
+			[]string{cert.LabelNamespace, cert.LabelIngressName, cert.LabelSecretName},
+		)
+		deletes = prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: prometheusNamespace,
+				Name:      "certpair_deletes_total",
+				Help:      "Total certificate pairs deletes from disk.",
+			},
+			[]string{cert.LabelNamespace, cert.LabelIngressName, cert.LabelSecretName},
+		)
+		errors = prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: prometheusNamespace,
+				Name:      "errors_total",
+				Help:      "Total errors encountered while managing certificate pairs.",
+			},
+			[]string{cert.LabelErrorContext},
+		)
+	)
+	prometheus.MustRegister(writes, deletes, errors)
 
 	log, err := zap.NewProduction()
 	if *debug {
@@ -49,6 +86,8 @@ func main() {
 	}
 	kingpin.FatalIfError(err, "cannot create log")
 	defer log.Sync()
+
+	mx := cert.Metrics{Writes: writes, Deletes: deletes, Errors: errors}
 
 	c, err := buildConfigFromFlags(*apiserver, *kubecfg)
 	kingpin.FatalIfError(err, "cannot create Kubernetes client configuration")
@@ -65,6 +104,7 @@ func main() {
 
 	m, err := cert.NewManager(*dir, secrets,
 		cert.WithLogger(log),
+		cert.WithMetrics(mx),
 		cert.WithFilesystem(afero.NewOsFs()),
 		cert.WithValidator(v),
 		cert.WithSubscriber(s))
@@ -74,7 +114,12 @@ func main() {
 	ingresses.AddEventHandler(sync)
 	secrets.AddEventHandler(sync)
 
-	kingpin.FatalIfError(await(sync, ingresses, secrets), "error watching Kubernetes")
+	h := &httpRunner{l: *listen, h: map[string]http.Handler{
+		"/metrics": promhttp.Handler(),
+		"/healthz": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { r.Body.Close() }), // nolint:gas
+	}}
+
+	kingpin.FatalIfError(await(h, sync, ingresses, secrets), "error watching Kubernetes")
 }
 
 type runner interface {
@@ -89,6 +134,28 @@ func await(rs ...runner) error {
 		g.Add(func() error { r.Run(stop); return nil }, func(err error) { close(stop) })
 	}
 	return g.Run()
+}
+
+type httpRunner struct {
+	l string
+	h map[string]http.Handler
+}
+
+func (r *httpRunner) Run(stop <-chan struct{}) {
+	rt := httprouter.New()
+	for path, handler := range r.h {
+		rt.Handler("GET", path, handler)
+	}
+
+	s := &http.Server{Addr: r.l, Handler: rt}
+	ctx, cancel := context.WithTimeout(context.Background(), 0*time.Second)
+	go func() {
+		<-stop
+		s.Shutdown(ctx) // nolint:gas
+	}()
+	s.ListenAndServe() // nolint:gas
+	cancel()
+	return
 }
 
 // Many Kubernetes client things depend on glog. glog gets sad when flag.Parse()
