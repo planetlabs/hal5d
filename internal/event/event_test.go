@@ -168,7 +168,7 @@ func TestNewDelete(t *testing.T) {
 	}
 }
 
-func TestNewInvalid(t *testing.T) {
+func TestNewInvalidSecret(t *testing.T) {
 	cases := []struct {
 		name        string
 		i           mapIngressStore
@@ -187,8 +187,8 @@ func TestNewInvalid(t *testing.T) {
 				{
 					metadata{namespace, coolIngressName},
 					v1.EventTypeWarning,
-					eventCertPairInvalid,
-					"Could not load invalid TLS certificate from secret " + coolSecretName,
+					eventTLSSecretInvalid,
+					"Could not load TLS certificate from invalid secret " + coolSecretName,
 				}: true,
 			},
 		},
@@ -206,16 +206,16 @@ func TestNewInvalid(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mr := &mapRecorder{e: make(map[event]bool)}
 			r := NewKubernetesRecorder(mr, tc.i)
-			r.NewInvalid(tc.ns, tc.ingressName, tc.secretName)
+			r.NewInvalidSecret(tc.ns, tc.ingressName, tc.secretName)
 
 			for e := range tc.want {
 				if !mr.e[e] {
-					t.Errorf("n.NewInvalid(%v, %v, %v): want event %#v", tc.ns, tc.ingressName, tc.secretName, e)
+					t.Errorf("n.NewInvalidSecret(%v, %v, %v): want event %#v", tc.ns, tc.ingressName, tc.secretName, e)
 				}
 			}
 			for e := range mr.e {
 				if !tc.want[e] {
-					t.Errorf("n.NewInvalid(%v, %v, %v): got unwanted event %#v", tc.ns, tc.ingressName, tc.secretName, e)
+					t.Errorf("n.NewInvalidSecret(%v, %v, %v): got unwanted event %#v", tc.ns, tc.ingressName, tc.secretName, e)
 				}
 			}
 		})
