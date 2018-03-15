@@ -17,6 +17,7 @@ import:
 - package: k8s.io/apimachinery
   subpackages:
   - pkg/fields
+  - pkg/runtime
 - package: k8s.io/client-go
   version: v6.0.0
   subpackages:
@@ -25,6 +26,7 @@ import:
   - tools/cache
   - tools/clientcmd
   - tools/clientcmd/api
+  - tools/record
 - package: github.com/prometheus/client_golang
   version: v0.9.0-pre1
 - package: github.com/julienschmidt/httprouter
