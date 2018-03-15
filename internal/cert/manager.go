@@ -278,11 +278,13 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 		cert, ok := s.Data[v1.TLSCertKey]
 		if !ok {
 			log.Info("missing certificate", zap.String("secret key", v1.TLSCertKey))
+			m.recorder.NewInvalid(i.GetNamespace(), i.GetName(), s.GetName())
 			continue
 		}
 		key, ok := s.Data[v1.TLSPrivateKeyKey]
 		if !ok {
 			log.Info("missing private key", zap.String("secret key", v1.TLSPrivateKeyKey))
+			m.recorder.NewInvalid(i.GetNamespace(), i.GetName(), s.GetName())
 			continue
 		}
 
@@ -402,11 +404,13 @@ func (m *Manager) upsertSecret(s *v1.Secret) bool {
 		cert, ok := s.Data[v1.TLSCertKey]
 		if !ok {
 			m.log.Info("missing TLS certificate", zap.String("secret key", v1.TLSCertKey))
+			m.recorder.NewInvalid(s.GetNamespace(), ingressName, s.GetName())
 			continue
 		}
 		key, ok := s.Data[v1.TLSPrivateKeyKey]
 		if !ok {
 			m.log.Info("missing TLS private key", zap.String("secret key", v1.TLSPrivateKeyKey))
+			m.recorder.NewInvalid(s.GetNamespace(), ingressName, s.GetName())
 			continue
 		}
 
