@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/negz/hal5d/internal/event"
 	"github.com/negz/hal5d/internal/kubernetes"
 	"github.com/negz/hal5d/internal/metrics"
 
@@ -127,9 +128,10 @@ func newNopMetrics() Metrics {
 // A Manager persists ingress TLS cert pairs to disk. Manager implements
 // cache.ResourceEventHandler in order to consume notifications about
 type Manager struct {
-	log    *zap.Logger
-	metric Metrics
-	fs     afero.Fs
+	log      *zap.Logger
+	metric   Metrics
+	recorder event.Recorder
+	fs       afero.Fs
 
 	tlsDir      string
 	v           Validator
@@ -183,12 +185,22 @@ func WithSubscriber(s Subscriber) ManagerOption {
 	}
 }
 
+// WithEventRecorder configures a certificate manager's Kubernetes event
+// recorder. The event recorder will emit events when certificate pairs change.
+func WithEventRecorder(r event.Recorder) ManagerOption {
+	return func(m *Manager) error {
+		m.recorder = r
+		return nil
+	}
+}
+
 // NewManager creates a new certificate manager.
 func NewManager(dir string, s kubernetes.SecretStore, o ...ManagerOption) (*Manager, error) {
 	m := &Manager{
 		log:         zap.NewNop(),
 		metric:      newNopMetrics(),
 		fs:          afero.NewOsFs(),
+		recorder:    &event.NopRecorder{},
 		tlsDir:      dir,
 		v:           &optimisticValidator{},
 		secretStore: s,
@@ -293,6 +305,7 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 			LabelIngressName: i.GetName(),
 			LabelSecretName:  s.GetName(),
 		}).Inc()
+		m.recorder.NewWrite(i.GetNamespace(), i.GetName(), s.GetName())
 		log.Debug("wrote cert pair")
 	}
 
@@ -315,6 +328,7 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 			LabelIngressName: i.GetName(),
 			LabelSecretName:  cp.SecretName,
 		}).Inc()
+		m.recorder.NewDelete(i.GetNamespace(), i.GetName(), cp.SecretName)
 		log.Debug("deleted cert pair")
 	}
 
@@ -413,6 +427,7 @@ func (m *Manager) upsertSecret(s *v1.Secret) bool {
 			LabelIngressName: ingressName,
 			LabelSecretName:  s.GetName(),
 		}).Inc()
+		m.recorder.NewWrite(s.GetNamespace(), ingressName, s.GetName())
 		log.Debug("wrote cert pair")
 	}
 
@@ -468,6 +483,7 @@ func (m *Manager) deleteSecret(s *v1.Secret) bool {
 			continue
 		}
 		changed = true
+		m.recorder.NewDelete(s.GetNamespace(), cp.IngressName, s.GetName())
 		log.Debug("deleted cert pair")
 		m.metric.Deletes.With(prometheus.Labels{
 			LabelNamespace:   s.GetNamespace(),

@@ -16,11 +16,9 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/alecthomas/kingpin.v2"
 	client "k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/tools/clientcmd/api"
 
 	"github.com/negz/hal5d/internal/cert"
+	"github.com/negz/hal5d/internal/event"
 	"github.com/negz/hal5d/internal/kubernetes"
 	"github.com/negz/hal5d/internal/webhook"
 	"github.com/negz/hal5d/internal/webhook/subscriber"
@@ -89,7 +87,7 @@ func main() {
 
 	mx := cert.Metrics{Writes: writes, Deletes: deletes, Errors: errors}
 
-	c, err := buildConfigFromFlags(*apiserver, *kubecfg)
+	c, err := kubernetes.BuildConfigFromFlags(*apiserver, *kubecfg)
 	kingpin.FatalIfError(err, "cannot create Kubernetes client configuration")
 
 	cs, err := client.NewForConfig(c)
@@ -97,6 +95,7 @@ func main() {
 
 	ingresses := kubernetes.NewIngressWatch(cs)
 	secrets := kubernetes.NewSecretWatch(cs)
+	e := kubernetes.NewEventRecorder(cs)
 
 	v := validator.New(webhook.New(*vURL))
 	s, err := subscriber.New(webhook.New(*rURL), subscriber.WithLogger(log))
@@ -105,6 +104,7 @@ func main() {
 	m, err := cert.NewManager(*dir, secrets,
 		cert.WithLogger(log),
 		cert.WithMetrics(mx),
+		cert.WithEventRecorder(event.NewKubernetesRecorder(e, ingresses)),
 		cert.WithFilesystem(afero.NewOsFs()),
 		cert.WithValidator(v),
 		cert.WithSubscriber(s))
@@ -164,15 +164,4 @@ func (r *httpRunner) Run(stop <-chan struct{}) {
 func glogWorkaround() {
 	os.Args = []string{os.Args[0], "-logtostderr=true", "-v=0", "-vmodule="}
 	flag.Parse()
-}
-
-// https://godoc.org/k8s.io/client-go/tools/clientcmd#BuildConfigFromFlags with
-// no annoying dependencies on glog.
-func buildConfigFromFlags(apiserver, kubecfg string) (*rest.Config, error) {
-	if kubecfg != "" || apiserver != "" {
-		return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-			&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubecfg},
-			&clientcmd.ConfigOverrides{ClusterInfo: api.Cluster{Server: apiserver}}).ClientConfig()
-	}
-	return rest.InClusterConfig()
 }

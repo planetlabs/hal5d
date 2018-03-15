@@ -1,5 +1,5 @@
-hash: d1ae6e83d3949be80112b349b7bf9eeda57ca8d5ece81b8f82058c85da003d5c
-updated: 2018-03-14T20:39:38.418543-07:00
+hash: c6dbcbd511c8bbb8a245f309ee41d7e24a82b4051cc800e4b3cff537f21255e7
+updated: 2018-03-15T16:39:29.070771-07:00
 imports:
 - name: github.com/alecthomas/template
   version: a0175ee3bccc567396460bf5acd36800cb10c49c
@@ -36,6 +36,10 @@ imports:
   - sortkeys
 - name: github.com/golang/glog
   version: 44145f04b68cf362d9c4df2182967c2275eaefed
+- name: github.com/golang/groupcache
+  version: 02826c3e79038b59d737d3b1c0a1d937f71a4433
+  subpackages:
+  - lru
 - name: github.com/golang/protobuf
   version: 1643683e1b54a9e88ad26d98f81400c8c9d9f4f9
   subpackages:
@@ -231,15 +235,18 @@ imports:
   - pkg/util/framer
   - pkg/util/intstr
   - pkg/util/json
+  - pkg/util/mergepatch
   - pkg/util/net
   - pkg/util/runtime
   - pkg/util/sets
+  - pkg/util/strategicpatch
   - pkg/util/validation
   - pkg/util/validation/field
   - pkg/util/wait
   - pkg/util/yaml
   - pkg/version
   - pkg/watch
+  - third_party/forked/golang/json
   - third_party/forked/golang/reflect
 - name: k8s.io/client-go
   version: 78700dec6369ba22221b72770783300f143df150
@@ -286,6 +293,7 @@ imports:
   - tools/clientcmd/api/v1
   - tools/metrics
   - tools/pager
+  - tools/record
   - tools/reference
   - transport
   - util/buffer
