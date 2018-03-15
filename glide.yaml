@@ -25,6 +25,10 @@ import:
   - tools/cache
   - tools/clientcmd
   - tools/clientcmd/api
+- package: github.com/prometheus/client_golang
+  version: v0.9.0-pre1
+- package: github.com/julienschmidt/httprouter
+  version: v1.1
 testImport:
 - package: github.com/go-test/deep
   version: v1.0.1
