@@ -1,0 +1,489 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: l5d-config
+  namespace: kube-system
+data:
+  config.yaml: |-
+    admin:
+      ip: 0.0.0.0
+      port: 9990
+
+    namers:
+    - kind: io.l5d.k8s
+    - kind: io.l5d.k8s
+      prefix: /io.l5d.k8s.http
+      transformers:
+      - kind: io.l5d.k8s.daemonset
+        namespace: kube-system
+        port: http-incoming
+        service: l5d
+        hostNetwork: true
+    - kind: io.l5d.k8s
+      prefix: /io.l5d.k8s.h2
+      transformers:
+      - kind: io.l5d.k8s.daemonset
+        namespace: kube-system
+        port: h2-incoming
+        service: l5d
+        hostNetwork: true
+    - kind: io.l5d.k8s
+      prefix: /io.l5d.k8s.grpc
+      transformers:
+      - kind: io.l5d.k8s.daemonset
+        namespace: kube-system
+        port: grpc-incoming
+        service: l5d
+        hostNetwork: true
+    - kind: io.l5d.rewrite
+      prefix: /portNsSvcToK8s
+      pattern: "/{port}/{ns}/{svc}"
+      name: "/k8s/{ns}/{port}/{svc}"
+
+    telemetry:
+    - kind: io.l5d.prometheus
+    - kind: io.l5d.recentRequests
+      sampleRate: 0.02
+
+    routers:
+    - label: http-outgoing
+      originator: true
+      protocol: http
+      servers:
+      - port: 4140
+        ip: 0.0.0.0
+      dtab: |
+        /ph  => /$/io.buoyant.rinet ;                     # /ph/80/google.com -> /$/io.buoyant.rinet/80/google.com
+        /svc => /ph/80 ;                                  # /svc/google.com -> /ph/80/google.com
+        /svc => /$/io.buoyant.porthostPfx/ph ;            # /svc/google.com:80 -> /ph/80/google.com
+        /k8s => /#/io.l5d.k8s.http ;                      # /k8s/default/http/foo -> /#/io.l5d.k8s.http/default/http/foo
+        /portNsSvc => /#/portNsSvcToK8s ;                 # /portNsSvc/http/default/foo -> /k8s/default/http/foo
+        /host => /portNsSvc/http/default ;                # /host/foo -> /portNsSvc/http/default/foo
+        /host => /portNsSvc/http ;                        # /host/default/foo -> /portNsSvc/http/default/foo
+        /svc => /$/io.buoyant.http.domainToPathPfx/host ; # /svc/foo.default -> /host/default/foo
+      client:
+        kind: io.l5d.static
+        configs:
+        - prefix: "/$/io.buoyant.rinet/443/{service}"
+          tls:
+            commonName: "{service}"
+
+    - label: http-incoming
+      protocol: http
+      servers:
+      - port: 4141
+        ip: 0.0.0.0
+      identifier:
+        - kind: io.l5d.ingress
+          ignoreDefaultBackends: true
+        - kind: io.l5d.header.token
+      interpreter:
+        kind: default
+        transformers:
+        - kind: io.l5d.k8s.localnode
+          hostNetwork: true
+      dtab: |
+        /svc => /#/io.l5d.k8s ;                           # /svc/default/http/foo -> /#/io.l5d.k8s/default/http/foo
+        /k8s => /#/io.l5d.k8s ;                           # /k8s/default/http/foo -> /#/io.l5d.k8s/default/http/foo
+        /portNsSvc => /#/portNsSvcToK8s ;                 # /portNsSvc/http/default/foo -> /k8s/default/http/foo
+        /host => /portNsSvc/http/default ;                # /host/foo -> /portNsSvc/http/default/foo
+        /host => /portNsSvc/http ;                        # /host/default/foo -> /portNsSvc/http/default/foo
+        /svc => /$/io.buoyant.http.domainToPathPfx/host ; # /svc/foo.default -> /host/default/foo
+
+    - label: h2-outgoing
+      originator: true
+      protocol: h2
+      servers:
+      - port: 4240
+        ip: 0.0.0.0
+        /ph  => /$/io.buoyant.rinet ;                       # /ph/80/google.com -> /$/io.buoyant.rinet/80/google.com
+        /svc => /ph/80 ;                                    # /svc/google.com -> /ph/80/google.com
+        /svc => /$/io.buoyant.porthostPfx/ph ;              # /svc/google.com:80 -> /ph/80/google.com
+        /k8s => /#/io.l5d.k8s.h2 ;                          # /k8s/default/h2/foo -> /#/io.l5d.k8s.h2/default/h2/foo
+        /portNsSvc => /#/portNsSvcToK8s ;                   # /portNsSvc/h2/default/foo -> /k8s/default/h2/foo
+        /host => /portNsSvc/h2/default ;                    # /host/foo -> /portNsSvc/h2/default/foo
+        /host => /portNsSvc/h2 ;                            # /host/default/foo -> /portNsSvc/h2/default/foo
+        /svc => /$/io.buoyant.http.domainToPathPfx/host ;   # /svc/foo.default -> /host/default/foo
+      client:
+        kind: io.l5d.static
+        configs:
+        - prefix: "/$/io.buoyant.rinet/443/{service}"
+          tls:
+            commonName: "{service}"
+
+    - label: h2-incoming
+      protocol: h2
+      servers:
+      - port: 4241
+        ip: 0.0.0.0
+      identifier:
+        - kind: io.l5d.ingress
+          ignoreDefaultBackends: true
+        - kind: io.l5d.header.token
+      interpreter:
+        kind: default
+        transformers:
+        - kind: io.l5d.k8s.localnode
+          hostNetwork: true
+      dtab: |
+        /svc => /#/io.l5d.k8s ;                             # /svc/default/h2/foo -> /#/io.l5d.k8s/default/h2/foo
+        /k8s => /#/io.l5d.k8s ;                             # /k8s/default/h2/foo -> /#/io.l5d.k8s/default/h2/foo
+        /portNsSvc => /#/portNsSvcToK8s ;                   # /portNsSvc/h2/default/foo -> /k8s/default/h2/foo
+        /host => /portNsSvc/h2/default ;                    # /host/foo -> /portNsSvc/h2/default/foo
+        /host => /portNsSvc/h2 ;                            # /host/default/foo -> /portNsSvc/h2/default/foo
+        /svc => /$/io.buoyant.http.domainToPathPfx/host ;   # /svc/foo.default -> /host/default/foo
+
+    - label: grpc-outgoing
+      originator: true
+      protocol: h2
+      servers:
+      - port: 4340
+        ip: 0.0.0.0
+      identifier:
+        kind: io.l5d.header.path
+        segments: 1
+      dtab: |
+        /hp  => /$/inet ;                                # /hp/linkerd.io/8888 -> /$/inet/linkerd.io/8888
+        /svc => /$/io.buoyant.hostportPfx/hp ;           # /svc/linkerd.io:8888 -> /hp/linkerd.io/8888
+        /srv => /#/io.l5d.k8s.grpc/default/grpc;         # /srv/service/package -> /#/io.l5d.k8s.grpc/default/grpc/service/package
+        /svc => /$/io.buoyant.http.domainToPathPfx/srv ; # /svc/package.service -> /srv/service/package
+      client:
+        kind: io.l5d.static
+        configs:
+        - prefix: "/$/inet/{service}"
+          tls:
+            commonName: "{service}"
+
+    - label: gprc-incoming
+      protocol: h2
+      servers:
+      - port: 4341
+        ip: 0.0.0.0
+      identifier:
+        kind: io.l5d.header.path
+        segments: 1
+      interpreter:
+        kind: default
+        transformers:
+        - kind: io.l5d.k8s.localnode
+          hostNetwork: true
+      dtab: |
+        /srv => /#/io.l5d.k8s/default/grpc ;             # /srv/service/package -> /#/io.l5d.k8s/default/grpc/service/package
+        /svc => /$/io.buoyant.http.domainToPathPfx/srv ; # /svc/package.service -> /srv/service/package
+
+    - protocol: http
+      label: http-ingress
+      originator: true
+      servers:
+        - port: 4840
+          ip: 0.0.0.0
+      identifier:
+        kind: io.l5d.ingress
+        ignoreDefaultBackends: true
+      dtab: /svc => /#/io.l5d.k8s.http ;                 # /svc/default/http/foo -> /#/io.l5d.k8s/default/http/foo
+
+    - protocol: h2
+      originator: true
+      label: h2-ingress
+      servers:
+        - port: 4940
+          ip: 0.0.0.0
+      identifier:
+        kind: io.l5d.ingress
+        ignoreDefaultBackends: true
+      dtab: /svc => /#/io.l5d.k8s.h2 ;                   # /svc/default/h2/foo -> /#/io.l5d.k8s/default/h2/foo
+
+---
+apiVersion: apps/v1beta2
+kind: DaemonSet
+metadata:
+  labels:
+    component: l5d
+  name: l5d
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      component: l5d
+  template:
+    metadata:
+      labels:
+        component: l5d
+    spec:
+      volumes:
+      - name: l5d-config
+        configMap:
+          name: "l5d-config"
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: l5d
+        image: buoyantio/linkerd:1.3.6
+        args:
+        - /io.buoyant/linkerd/config/config.yaml
+        - -log.level=WARNING
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        ports:
+        - name: http-outgoing
+          containerPort: 4140
+          hostPort: 4140
+        - name: http-incoming
+          containerPort: 4141
+        - name: h2-outgoing
+          containerPort: 4240
+          hostPort: 4240
+        - name: h2-incoming
+          containerPort: 4241
+        - name: grpc-outgoing
+          containerPort: 4340
+          hostPort: 4340
+        - name: grpc-incoming
+          containerPort: 4341
+        - name: http-ingress
+          containerPort: 4840
+        - name: h2-ingress
+          containerPort: 4940
+        - name: admin
+          containerPort: 9990
+        volumeMounts:
+        - name: "l5d-config"
+          mountPath: "/io.buoyant/linkerd/config"
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /admin/ping
+            port: 9990
+            scheme: HTTP
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /admin/ping
+            port: 9990
+            scheme: HTTP
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 6
+      - name: kubectl
+        image: buoyantio/kubectl:v1.4.0
+        args:
+        - "proxy"
+        - "-p"
+        - "8001"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: l5d
+  namespace: kube-system
+spec:
+  selector:
+    component: l5d
+  type: ClusterIP
+  ports:
+  - name: http-outgoing
+    port: 4140
+  - name: http-incoming
+    port: 4141
+  - name: h2-outgoing
+    port: 4240
+  - name: h2-incoming
+    port: 4241
+  - name: grpc-outgoing
+    port: 4340
+  - name: grpc-incoming
+    port: 4341
+  - name: admin
+    port: 9990
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: l5d-ingress-haproxy-config
+  namespace: kube-system
+data:
+  haproxy.cfg: |-
+    global
+      log 127.0.0.1 local0 info
+      stats socket /var/lib/haproxy/socket mode 600 level admin expose-fd listeners
+      stats socket 0.0.0.0:9000 level operator
+
+      maxconn 16000
+
+      nbthread 2
+      cpu-map auto:1/1-2 0-1
+
+      # Courtesy of https://mozilla.github.io/server-side-tls/ssl-config-generator/
+      tune.ssl.default-dh-param 2048
+      ssl-default-bind-ciphers ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA:ECDHE-RSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA:ECDHE-ECDSA-DES-CBC3-SHA:ECDHE-RSA-DES-CBC3-SHA:EDH-RSA-DES-CBC3-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:DES-CBC3-SHA:!DSS
+      ssl-default-bind-options no-sslv3 no-tls-tickets
+      ssl-default-server-ciphers ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA:ECDHE-RSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA:ECDHE-ECDSA-DES-CBC3-SHA:ECDHE-RSA-DES-CBC3-SHA:EDH-RSA-DES-CBC3-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:DES-CBC3-SHA:!DSS
+      ssl-default-server-options no-sslv3 no-tls-tickets
+
+    defaults
+      log global
+      mode http
+
+      option dontlognull
+      option httplog
+      option dontlog-normal
+
+      option forwardfor except 127.0.0.0/8 header Forwarded
+
+      timeout connect 5s
+      timeout check 5s
+      timeout client-fin 30s
+      timeout queue 1m
+      timeout server 1m
+      timeout client 1m
+      timeout http-request 10s
+      timeout tunnel 10h
+
+      balance static-rr
+
+    listen admin
+      bind :9980
+
+      stats enable
+      stats uri /
+
+      acl linkerd_http_down nbsrv(linkerd_http) lt 1
+      acl linkerd_h2_down nbsrv(linkerd_h2) lt 1
+      monitor fail if linkerd_http_down || linkerd_h2_down
+      monitor-uri /health
+
+    frontend http
+      bind :80
+      bind :443 ssl crt /etc/kubernetes/tls-ingress-fallback.combined crt /tls alpn h2,http/1.1
+      default_backend linkerd_http
+
+    backend linkerd_http
+      option httpchk GET /admin/ping
+      default-server inter 3s fall 3 rise 1
+      http-check expect status 200
+      server linkerd 127.0.0.1:4840 check port 9990
+
+    frontend h2
+      bind :8080
+      bind :8443 ssl crt /etc/kubernetes/tls-ingress-fallback.combined crt /tls alpn h2,http/1.1
+      default_backend linkerd_h2
+
+    backend linkerd_h2
+      option httpchk GET /admin/ping
+      default-server inter 3s fall 3 rise 1
+      http-check expect status 200
+      server linkerd 127.0.0.1:4940 check port 9990
+---
+apiVersion: apps/v1beta2
+kind: DaemonSet
+metadata:
+  labels:
+    component: l5d-ingress-haproxy
+  name: l5d-ingress-haproxy
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      component: l5d-ingress-haproxy
+  template:
+    metadata:
+      labels:
+        component: l5d-ingress-haproxy
+    spec:
+      volumes:
+      - name: config
+        configMap:
+          name: l5d-ingress-haproxy-config
+      - name: etc-kubernetes
+        hostPath:
+          path: /etc/kubernetes
+      - name: tls
+        emptyDir:
+          medium: Memory
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: haproxy
+        # You'll need a version of haproxy-docker-wrapper that includes
+        # https://github.com/tuenti/haproxy-docker-wrapper/pull/3
+        image: tuenti/haproxy-docker-wrapper:2.0.0_1.8.4_validate
+        command:
+        - /usr/local/bin/haproxy-docker-wrapper
+        - -haproxy-config
+        - /usr/local/etc/haproxy
+        ports:
+        - name: http
+          containerPort: 80
+          hostPort: 80
+        - name: https
+          containerPort: 443
+          hostPort: 443
+        - name: stats
+          containerPort: 9000
+          hostPort: 9000
+        - name: admin
+          containerPort: 9980
+          hostPort: 9980
+        - name: wrapper
+          containerPort: 15000
+          hostPort: 15000
+        volumeMounts:
+        - name: "config"
+          mountPath: "/usr/local/etc/haproxy"
+          readOnly: true
+        - name: "etc-kubernetes"
+          mountPath: "/etc/kubernetes"
+          readOnly: true
+        - name: "tls"
+          mountPath: "/tls"
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 9980
+            scheme: HTTP
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 9980
+            scheme: HTTP
+        resources:
+          limits:
+            cpu: 2200m
+            memory: 512Mi
+          requests:
+            cpu: 2000m
+            memory: 256Mi
+      - name: hal5d
+        image: negz/hal5d:c186c1d
+        command: ["/hal5d"]
+        ports:
+        - name: metrics
+          containerPort: 10002
+          hostPort: 10002
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 10002
+            scheme: HTTP
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 10002
+            scheme: HTTP
+        volumeMounts:
+        - name: "tls"
+          mountPath: "/tls"
