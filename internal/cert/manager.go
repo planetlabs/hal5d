@@ -297,6 +297,7 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 		}
 		if err := m.write(cd); err != nil {
 			log.Error("cannot write cert pair", zap.Error(err))
+			m.recorder.NewInvalidSecret(i.GetNamespace(), i.GetName(), s.GetName())
 			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextUpsertIngress}).Inc()
 			continue
 		}
@@ -422,6 +423,7 @@ func (m *Manager) upsertSecret(s *v1.Secret) bool {
 		}
 		if err := m.write(cd); err != nil {
 			log.Error("cannot write cert pair", zap.Error(err))
+			m.recorder.NewInvalidSecret(s.GetNamespace(), ingressName, s.GetName())
 			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextUpsertSecret}).Inc()
 			continue
 		}
