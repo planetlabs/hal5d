@@ -109,6 +109,16 @@ func main() {
 	s, err := subscriber.New(webhook.New(*rURL), subscriber.WithLogger(log))
 	kingpin.FatalIfError(err, "cannot create reload webhook")
 
+	// This works around the race when a pod running both haproxy and hal5d
+	// starts. If hal5d starts first and writes out some TLS certificates fast
+	// enough they will fail validation due to the haproxy container not being
+	// up yet. This will result in TLS certificates not being written until the
+	// watch caches are refreshed 30 minutes after the pod starts.
+	for err = v.Validate(); err != nil; err = v.Validate() {
+		log.Info("waiting for valid haproxy configuration", zap.Error(err))
+		time.Sleep(2 * time.Second)
+	}
+
 	m, err := cert.NewManager(*dir, secrets,
 		cert.WithLogger(log),
 		cert.WithMetrics(mx),
