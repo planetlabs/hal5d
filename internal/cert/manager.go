@@ -310,7 +310,11 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 			// it informationally, and do not emit an error metric.
 			log.Info("cannot get TLS secret", zap.Error(err))
 			m.recorder.NewInvalidSecret(i.GetNamespace(), i.GetName(), tls.SecretName)
-			m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertIngress}).Inc()
+			m.metric.Invalids.With(prometheus.Labels{
+				LabelNamespace:   i.GetNamespace(),
+				LabelIngressName: i.GetName(),
+				LabelSecretName:  tls.SecretName,
+			}).Inc()
 			continue
 		}
 		log.Debug("found secret")
@@ -319,14 +323,22 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 		if !ok {
 			log.Info("missing certificate", zap.String("secret key", v1.TLSCertKey))
 			m.recorder.NewInvalidSecret(i.GetNamespace(), i.GetName(), s.GetName())
-			m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertIngress}).Inc()
+			m.metric.Invalids.With(prometheus.Labels{
+				LabelNamespace:   i.GetNamespace(),
+				LabelIngressName: i.GetName(),
+				LabelSecretName:  s.GetName(),
+			}).Inc()
 			continue
 		}
 		key, ok := s.Data[v1.TLSPrivateKeyKey]
 		if !ok {
 			log.Info("missing private key", zap.String("secret key", v1.TLSPrivateKeyKey))
 			m.recorder.NewInvalidSecret(i.GetNamespace(), i.GetName(), s.GetName())
-			m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertIngress}).Inc()
+			m.metric.Invalids.With(prometheus.Labels{
+				LabelNamespace:   i.GetNamespace(),
+				LabelIngressName: i.GetName(),
+				LabelSecretName:  s.GetName(),
+			}).Inc()
 			continue
 		}
 
@@ -341,7 +353,11 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 			if IsInvalid(err) {
 				log.Info("invalid cert pair", zap.Error(err))
 				m.recorder.NewInvalidSecret(i.GetNamespace(), i.GetName(), s.GetName())
-				m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertIngress}).Inc()
+				m.metric.Invalids.With(prometheus.Labels{
+					LabelNamespace:   i.GetNamespace(),
+					LabelIngressName: i.GetName(),
+					LabelSecretName:  s.GetName(),
+				}).Inc()
 				continue
 			}
 			log.Error("cannot write cert pair", zap.Error(err))
@@ -453,14 +469,22 @@ func (m *Manager) upsertSecret(s *v1.Secret) bool {
 		if !ok {
 			m.log.Info("missing TLS certificate", zap.String("secret key", v1.TLSCertKey))
 			m.recorder.NewInvalidSecret(s.GetNamespace(), ingressName, s.GetName())
-			m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertSecret}).Inc()
+			m.metric.Invalids.With(prometheus.Labels{
+				LabelNamespace:   s.GetNamespace(),
+				LabelIngressName: ingressName,
+				LabelSecretName:  s.GetName(),
+			}).Inc()
 			continue
 		}
 		key, ok := s.Data[v1.TLSPrivateKeyKey]
 		if !ok {
 			m.log.Info("missing TLS private key", zap.String("secret key", v1.TLSPrivateKeyKey))
 			m.recorder.NewInvalidSecret(s.GetNamespace(), ingressName, s.GetName())
-			m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertSecret}).Inc()
+			m.metric.Invalids.With(prometheus.Labels{
+				LabelNamespace:   s.GetNamespace(),
+				LabelIngressName: ingressName,
+				LabelSecretName:  s.GetName(),
+			}).Inc()
 			continue
 		}
 
@@ -474,7 +498,11 @@ func (m *Manager) upsertSecret(s *v1.Secret) bool {
 			if IsInvalid(err) {
 				log.Info("invalid cert pair", zap.Error(err))
 				m.recorder.NewInvalidSecret(s.GetNamespace(), ingressName, s.GetName())
-				m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertSecret}).Inc()
+				m.metric.Invalids.With(prometheus.Labels{
+					LabelNamespace:   s.GetNamespace(),
+					LabelIngressName: ingressName,
+					LabelSecretName:  s.GetName(),
+				}).Inc()
 				continue
 			}
 			log.Error("cannot write cert pair", zap.Error(err))

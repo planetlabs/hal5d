@@ -81,7 +81,7 @@ func main() {
 				Name:      "invalids_total",
 				Help:      "Total invalid secrets encountered while managing certificate pairs.",
 			},
-			[]string{cert.LabelContext},
+			[]string{cert.LabelNamespace, cert.LabelIngressName, cert.LabelSecretName},
 		)
 	)
 	prometheus.MustRegister(writes, deletes, errors, invalids)
