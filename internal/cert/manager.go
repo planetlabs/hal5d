@@ -41,6 +41,42 @@ const (
 	certPairMode      = 0600
 )
 
+type errInvalid struct {
+	error
+}
+
+// ErrInvalid wraps an error such that it will fulfill IsInvalid.
+func ErrInvalid(err error) error {
+	return &errInvalid{err}
+}
+
+// Invalid signals that this error indicates something was full.
+func (e *errInvalid) Invalid() {}
+
+// IsInvalid determines whether an error indicates a certificate was invalid.
+// It does this by walking down the stack of errors built by pkg/errors and
+// returning true for the first error that implements the following interface:
+//
+// type invalider interface {
+//   Invalid()
+// }
+func IsInvalid(err error) bool {
+	for {
+		if _, ok := err.(interface {
+			Invalid()
+		}); ok {
+			return true
+		}
+		if c, ok := err.(interface {
+			Cause() error
+		}); ok {
+			err = c.Cause()
+			continue
+		}
+		return false
+	}
+}
+
 type certPair struct {
 	Namespace   string
 	IngressName string
@@ -271,6 +307,7 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 			// ingress referencing a TLS secret that does not yet exist. We log
 			// it informationally, and do not emit an error metric.
 			log.Info("cannot get TLS secret", zap.Error(err))
+			m.recorder.NewInvalidSecret(i.GetNamespace(), i.GetName(), tls.SecretName)
 			continue
 		}
 		log.Debug("found secret")
@@ -296,8 +333,12 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 			continue
 		}
 		if err := m.write(cd); err != nil {
+			if IsInvalid(err) {
+				log.Info("invalid cert pair", zap.Error(err))
+				m.recorder.NewInvalidSecret(i.GetNamespace(), i.GetName(), s.GetName())
+				continue
+			}
 			log.Error("cannot write cert pair", zap.Error(err))
-			m.recorder.NewInvalidSecret(i.GetNamespace(), i.GetName(), s.GetName())
 			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextUpsertIngress}).Inc()
 			continue
 		}
@@ -387,7 +428,7 @@ func (m *Manager) write(c certData) error {
 	// This assumes the validate function treats the temp file as it would any
 	// other file in the TLS directory.
 	if err := m.v.Validate(); err != nil {
-		return errors.Wrapf(err, "writing certificate pair would result in invalid configuration")
+		return ErrInvalid(errors.Wrapf(err, "writing certificate pair would result in invalid configuration"))
 	}
 	path := filepath.Join(m.tlsDir, c.Filename())
 	return errors.Wrapf(m.fs.Rename(f.Name(), path), "cannot move %v to %v", f.Name(), path)
@@ -422,8 +463,12 @@ func (m *Manager) upsertSecret(s *v1.Secret) bool {
 			continue
 		}
 		if err := m.write(cd); err != nil {
+			if IsInvalid(err) {
+				log.Info("invalid cert pair", zap.Error(err))
+				m.recorder.NewInvalidSecret(s.GetNamespace(), ingressName, s.GetName())
+				continue
+			}
 			log.Error("cannot write cert pair", zap.Error(err))
-			m.recorder.NewInvalidSecret(s.GetNamespace(), ingressName, s.GetName())
 			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextUpsertSecret}).Inc()
 			continue
 		}
