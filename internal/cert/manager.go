@@ -21,18 +21,18 @@ import (
 
 // Labels used by metrics and logs.
 const (
-	LabelNamespace    = "namespace"
-	LabelIngressName  = "ingress_name"
-	LabelSecretName   = "secret_name"
-	LabelErrorContext = "context"
+	LabelNamespace   = "namespace"
+	LabelIngressName = "ingress_name"
+	LabelSecretName  = "secret_name"
+	LabelContext     = "context"
 )
 
 // Error contexts used as metric labels.
 const (
-	ErrorContextUpsertIngress = "upsert_ingress"
-	ErrorContextUpsertSecret  = "upsert_secret"
-	ErrorContextDeleteIngress = "delete_ingress"
-	ErrorContextDeleteSecret  = "delete_secret"
+	ContextUpsertIngress = "upsert_ingress"
+	ContextUpsertSecret  = "upsert_secret"
+	ContextDeleteIngress = "delete_ingress"
+	ContextDeleteSecret  = "delete_secret"
 )
 
 const (
@@ -40,6 +40,42 @@ const (
 	certPairSeparator = "-"
 	certPairMode      = 0600
 )
+
+type errInvalid struct {
+	error
+}
+
+// ErrInvalid wraps an error such that it will fulfill IsInvalid.
+func ErrInvalid(err error) error {
+	return &errInvalid{err}
+}
+
+// Invalid signals that this error indicates something was full.
+func (e *errInvalid) Invalid() {}
+
+// IsInvalid determines whether an error indicates a certificate was invalid.
+// It does this by walking down the stack of errors built by pkg/errors and
+// returning true for the first error that implements the following interface:
+//
+// type invalider interface {
+//   Invalid()
+// }
+func IsInvalid(err error) bool {
+	for {
+		if _, ok := err.(interface {
+			Invalid()
+		}); ok {
+			return true
+		}
+		if c, ok := err.(interface {
+			Cause() error
+		}); ok {
+			err = c.Cause()
+			continue
+		}
+		return false
+	}
+}
 
 type certPair struct {
 	Namespace   string
@@ -112,16 +148,18 @@ type Subscriber interface {
 
 // Metrics that may be exposed by a certificate manager.
 type Metrics struct {
-	Writes  metrics.CounterVec
-	Deletes metrics.CounterVec
-	Errors  metrics.CounterVec
+	Writes   metrics.CounterVec
+	Deletes  metrics.CounterVec
+	Errors   metrics.CounterVec
+	Invalids metrics.CounterVec
 }
 
 func newNopMetrics() Metrics {
 	return Metrics{
-		Writes:  &metrics.NopCounterVec{},
-		Deletes: &metrics.NopCounterVec{},
-		Errors:  &metrics.NopCounterVec{},
+		Writes:   &metrics.NopCounterVec{},
+		Deletes:  &metrics.NopCounterVec{},
+		Errors:   &metrics.NopCounterVec{},
+		Invalids: &metrics.NopCounterVec{},
 	}
 }
 
@@ -257,7 +295,7 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 	existing, err := m.existing(i.GetNamespace(), i.GetName())
 	if err != nil {
 		log.Error("cannot get existing cert pairs - stale cert pairs will not be reaped")
-		m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextUpsertIngress}).Inc()
+		m.metric.Errors.With(prometheus.Labels{LabelContext: ContextUpsertIngress}).Inc()
 	}
 
 	changed := false
@@ -271,6 +309,8 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 			// ingress referencing a TLS secret that does not yet exist. We log
 			// it informationally, and do not emit an error metric.
 			log.Info("cannot get TLS secret", zap.Error(err))
+			m.recorder.NewInvalidSecret(i.GetNamespace(), i.GetName(), tls.SecretName)
+			m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertIngress}).Inc()
 			continue
 		}
 		log.Debug("found secret")
@@ -279,12 +319,14 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 		if !ok {
 			log.Info("missing certificate", zap.String("secret key", v1.TLSCertKey))
 			m.recorder.NewInvalidSecret(i.GetNamespace(), i.GetName(), s.GetName())
+			m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertIngress}).Inc()
 			continue
 		}
 		key, ok := s.Data[v1.TLSPrivateKeyKey]
 		if !ok {
 			log.Info("missing private key", zap.String("secret key", v1.TLSPrivateKeyKey))
 			m.recorder.NewInvalidSecret(i.GetNamespace(), i.GetName(), s.GetName())
+			m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertIngress}).Inc()
 			continue
 		}
 
@@ -296,9 +338,14 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 			continue
 		}
 		if err := m.write(cd); err != nil {
+			if IsInvalid(err) {
+				log.Info("invalid cert pair", zap.Error(err))
+				m.recorder.NewInvalidSecret(i.GetNamespace(), i.GetName(), s.GetName())
+				m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertIngress}).Inc()
+				continue
+			}
 			log.Error("cannot write cert pair", zap.Error(err))
-			m.recorder.NewInvalidSecret(i.GetNamespace(), i.GetName(), s.GetName())
-			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextUpsertIngress}).Inc()
+			m.metric.Errors.With(prometheus.Labels{LabelContext: ContextUpsertIngress}).Inc()
 			continue
 		}
 		keep[cp] = true
@@ -321,7 +368,7 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 		path := filepath.Join(m.tlsDir, cp.Filename())
 		if err := m.fs.Remove(path); err != nil {
 			log.Error("cannot remove stale cert pair", zap.Error(err))
-			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextUpsertIngress}).Inc()
+			m.metric.Errors.With(prometheus.Labels{LabelContext: ContextUpsertIngress}).Inc()
 			continue
 		}
 		m.secretRefs.Delete(i.GetNamespace(), i.GetName(), cp.SecretName)
@@ -387,7 +434,7 @@ func (m *Manager) write(c certData) error {
 	// This assumes the validate function treats the temp file as it would any
 	// other file in the TLS directory.
 	if err := m.v.Validate(); err != nil {
-		return errors.Wrapf(err, "writing certificate pair would result in invalid configuration")
+		return ErrInvalid(errors.Wrapf(err, "writing certificate pair would result in invalid configuration"))
 	}
 	path := filepath.Join(m.tlsDir, c.Filename())
 	return errors.Wrapf(m.fs.Rename(f.Name(), path), "cannot move %v to %v", f.Name(), path)
@@ -406,12 +453,14 @@ func (m *Manager) upsertSecret(s *v1.Secret) bool {
 		if !ok {
 			m.log.Info("missing TLS certificate", zap.String("secret key", v1.TLSCertKey))
 			m.recorder.NewInvalidSecret(s.GetNamespace(), ingressName, s.GetName())
+			m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertSecret}).Inc()
 			continue
 		}
 		key, ok := s.Data[v1.TLSPrivateKeyKey]
 		if !ok {
 			m.log.Info("missing TLS private key", zap.String("secret key", v1.TLSPrivateKeyKey))
 			m.recorder.NewInvalidSecret(s.GetNamespace(), ingressName, s.GetName())
+			m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertSecret}).Inc()
 			continue
 		}
 
@@ -422,9 +471,14 @@ func (m *Manager) upsertSecret(s *v1.Secret) bool {
 			continue
 		}
 		if err := m.write(cd); err != nil {
+			if IsInvalid(err) {
+				log.Info("invalid cert pair", zap.Error(err))
+				m.recorder.NewInvalidSecret(s.GetNamespace(), ingressName, s.GetName())
+				m.metric.Invalids.With(prometheus.Labels{LabelContext: ContextUpsertSecret}).Inc()
+				continue
+			}
 			log.Error("cannot write cert pair", zap.Error(err))
-			m.recorder.NewInvalidSecret(s.GetNamespace(), ingressName, s.GetName())
-			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextUpsertSecret}).Inc()
+			m.metric.Errors.With(prometheus.Labels{LabelContext: ContextUpsertSecret}).Inc()
 			continue
 		}
 		changed = true
@@ -456,7 +510,7 @@ func (m *Manager) deleteIngress(i *v1beta1.Ingress) bool {
 		path := filepath.Join(m.tlsDir, cp.Filename())
 		if err := m.fs.Remove(path); err != nil {
 			log.Error("cannot remove stale cert pair", zap.Error(err))
-			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextDeleteIngress}).Inc()
+			m.metric.Errors.With(prometheus.Labels{LabelContext: ContextDeleteIngress}).Inc()
 			continue
 		}
 		m.secretRefs.Delete(i.GetNamespace(), i.GetName(), cp.SecretName)
@@ -485,7 +539,7 @@ func (m *Manager) deleteSecret(s *v1.Secret) bool {
 		path := filepath.Join(m.tlsDir, cp.Filename())
 		if err := m.fs.Remove(path); err != nil {
 			log.Error("cannot remove stale TLS certpair", zap.Error(err))
-			m.metric.Errors.With(prometheus.Labels{LabelErrorContext: ErrorContextDeleteSecret}).Inc()
+			m.metric.Errors.With(prometheus.Labels{LabelContext: ContextDeleteSecret}).Inc()
 			continue
 		}
 		changed = true

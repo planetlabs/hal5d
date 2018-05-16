@@ -63,7 +63,7 @@ func main() {
 			prometheus.CounterOpts{
 				Namespace: prometheusNamespace,
 				Name:      "certpair_deletes_total",
-				Help:      "Total certificate pairs deletes from disk.",
+				Help:      "Total certificate pairs deleted from disk.",
 			},
 			[]string{cert.LabelNamespace, cert.LabelIngressName, cert.LabelSecretName},
 		)
@@ -73,7 +73,15 @@ func main() {
 				Name:      "errors_total",
 				Help:      "Total errors encountered while managing certificate pairs.",
 			},
-			[]string{cert.LabelErrorContext},
+			[]string{cert.LabelContext},
+		)
+		invalids = prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: prometheusNamespace,
+				Name:      "invalids_total",
+				Help:      "Total invalid secrets encountered while managing certificate pairs.",
+			},
+			[]string{cert.LabelContext},
 		)
 	)
 	prometheus.MustRegister(writes, deletes, errors)
@@ -85,7 +93,7 @@ func main() {
 	kingpin.FatalIfError(err, "cannot create log")
 	defer log.Sync()
 
-	mx := cert.Metrics{Writes: writes, Deletes: deletes, Errors: errors}
+	mx := cert.Metrics{Writes: writes, Deletes: deletes, Errors: errors, Invalids: invalids}
 
 	c, err := kubernetes.BuildConfigFromFlags(*apiserver, *kubecfg)
 	kingpin.FatalIfError(err, "cannot create Kubernetes client configuration")

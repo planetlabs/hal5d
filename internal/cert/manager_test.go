@@ -2,6 +2,7 @@ package cert
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -48,6 +49,48 @@ var (
 		},
 	}
 )
+
+func TestErr(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		tester func(error) bool
+		want   bool
+	}{
+		{
+			name:   "FmtIsInvalid",
+			err:    ErrInvalid(fmt.Errorf("kaboom")),
+			tester: IsInvalid,
+			want:   true,
+		},
+		{
+			name:   "ErrorsIsInvalid",
+			err:    ErrInvalid(errors.New("kaboom")),
+			tester: IsInvalid,
+			want:   true,
+		},
+		{
+			name:   "WrappedIsInvalid",
+			err:    errors.Wrap(ErrInvalid(errors.New("kaboom")), "full"),
+			tester: IsInvalid,
+			want:   true,
+		},
+		{
+			name:   "NotInvalid",
+			err:    errors.New("kaboom"),
+			tester: IsInvalid,
+			want:   false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.tester(tc.err)
+			if got != tc.want {
+				t.Errorf("%v: got %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestNewCertPair(t *testing.T) {
 	cases := []struct {
