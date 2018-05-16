@@ -84,7 +84,7 @@ func main() {
 			[]string{cert.LabelContext},
 		)
 	)
-	prometheus.MustRegister(writes, deletes, errors)
+	prometheus.MustRegister(writes, deletes, errors, invalids)
 
 	log, err := zap.NewProduction()
 	if *debug {
