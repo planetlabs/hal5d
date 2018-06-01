@@ -216,7 +216,7 @@ func TestUpsertIngress(t *testing.T) {
 			},
 			v: &optimisticValidator{},
 			want: map[string][]byte{
-				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+				"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 			},
 		},
 		{
@@ -227,15 +227,15 @@ func TestUpsertIngress(t *testing.T) {
 			},
 			v: &optimisticValidator{},
 			existing: map[string][]byte{
-				"ns-anotherIngress-existingSecret.pem":     []byte("certkey2"),
+				"ns-anotherIngress-existingSecret.pem":     []byte("cert\nkey2"),
 				"dankCert.pem":                             []byte("sodank"),
-				"anotherns-coolIngress-existingSecret.pem": []byte("certkey3"),
+				"anotherns-coolIngress-existingSecret.pem": []byte("cert\nkey3"),
 			},
 			want: map[string][]byte{
-				"ns-anotherIngress-existingSecret.pem":     []byte("certkey2"),
-				"ns-coolIngress-coolSecret.pem":            []byte("certkey"),
+				"ns-anotherIngress-existingSecret.pem":     []byte("cert\nkey2"),
+				"ns-coolIngress-coolSecret.pem":            []byte("cert\nkey"),
 				"dankCert.pem":                             []byte("sodank"),
-				"anotherns-coolIngress-existingSecret.pem": []byte("certkey3"),
+				"anotherns-coolIngress-existingSecret.pem": []byte("cert\nkey3"),
 			},
 		},
 		{
@@ -246,10 +246,10 @@ func TestUpsertIngress(t *testing.T) {
 			},
 			v: &optimisticValidator{},
 			existing: map[string][]byte{
-				"ns-coolIngress-existingSecret.pem": []byte("certkey1"),
+				"ns-coolIngress-existingSecret.pem": []byte("cert\nkey1"),
 			},
 			want: map[string][]byte{
-				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+				"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 			},
 		},
 		{
@@ -260,10 +260,10 @@ func TestUpsertIngress(t *testing.T) {
 			},
 			v: &optimisticValidator{},
 			existing: map[string][]byte{
-				"ns-coolIngress-coolSecret.pem": []byte("suchcertverykey"),
+				"ns-coolIngress-coolSecret.pem": []byte("suchcert\nverykey"),
 			},
 			want: map[string][]byte{
-				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+				"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 			},
 		},
 		{
@@ -274,10 +274,10 @@ func TestUpsertIngress(t *testing.T) {
 			},
 			v: &optimisticValidator{},
 			existing: map[string][]byte{
-				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+				"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 			},
 			want: map[string][]byte{
-				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+				"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 			},
 		},
 		{
@@ -350,7 +350,7 @@ func TestUpsertSecret(t *testing.T) {
 			st:   mapSecretStore{},
 			v:    &optimisticValidator{},
 			want: map[string][]byte{
-				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+				"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 			},
 			wantChanges: 1,
 		},
@@ -369,7 +369,7 @@ func TestUpsertSecret(t *testing.T) {
 			},
 			v: &optimisticValidator{},
 			want: map[string][]byte{
-				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+				"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 			},
 			wantChanges: 2,
 		},
@@ -382,7 +382,7 @@ func TestUpsertSecret(t *testing.T) {
 			},
 			v: &optimisticValidator{},
 			want: map[string][]byte{
-				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+				"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 			},
 			wantChanges: 1,
 		},
@@ -419,7 +419,7 @@ func TestUpsertSecret(t *testing.T) {
 			},
 			v: &optimisticValidator{},
 			want: map[string][]byte{
-				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+				"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 			},
 			wantChanges: 1,
 		},
@@ -459,18 +459,18 @@ func TestDeleteIngress(t *testing.T) {
 			name: "DeleteOnlyIngress",
 			i:    coolIngress,
 			existing: map[string][]byte{
-				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
-				"ns-coolIngress-dankSecret.pem": []byte("anothercertanotherkey"),
+				"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
+				"ns-coolIngress-dankSecret.pem": []byte("anothercert\nanotherkey"),
 			},
 		},
 		{
 			name: "DeleteUnknownIngress",
 			i:    coolIngress,
 			existing: map[string][]byte{
-				"anotherns-coolIngress-coolSecret.pem": []byte("certkey"),
+				"anotherns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 			},
 			want: map[string][]byte{
-				"anotherns-coolIngress-coolSecret.pem": []byte("certkey"),
+				"anotherns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 			},
 		},
 	}
@@ -522,7 +522,7 @@ func TestDeleteSecret(t *testing.T) {
 				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
 			},
 			want: map[string][]byte{
-				"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+				"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 			},
 			wantChanges: 1,
 		},
@@ -565,7 +565,7 @@ func TestUpsertDeleteUpsertSecret(t *testing.T) {
 	m.OnDelete(coolSecret)
 	m.OnAdd(coolSecret)
 	validate(t, fs, dir, map[string][]byte{
-		"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+		"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 	})
 }
 
@@ -586,6 +586,6 @@ func TestUpsertDeleteUpsertIngress(t *testing.T) {
 	m.OnDelete(coolIngress)
 	m.OnAdd(coolIngress)
 	validate(t, fs, dir, map[string][]byte{
-		"ns-coolIngress-coolSecret.pem": []byte("certkey"),
+		"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 	})
 }
