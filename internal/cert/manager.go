@@ -1,6 +1,7 @@
 package cert
 
 import (
+	"bytes"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -102,6 +103,10 @@ type certData struct {
 	certPair
 	Cert []byte
 	Key  []byte
+}
+
+func (c certData) Bytes() []byte {
+	return bytes.Join([][]byte{c.Cert, c.Key}, []byte("\n"))
 }
 
 type metadata struct {
@@ -414,10 +419,7 @@ func (m *Manager) changed(c certData) bool {
 	}
 
 	proposed := fnv.New32a()
-	if _, err := proposed.Write(c.Cert); err != nil {
-		return true
-	}
-	if _, err := proposed.Write(c.Key); err != nil {
+	if _, err := proposed.Write(c.Bytes()); err != nil {
 		return true
 	}
 
@@ -432,11 +434,8 @@ func (m *Manager) write(c certData) error {
 	defer f.Close()
 	defer m.fs.Remove(f.Name())
 
-	if _, err := f.Write(c.Cert); err != nil {
-		return errors.Wrapf(err, "cannot write cert data to %v", f.Name())
-	}
-	if _, err := f.Write(c.Key); err != nil {
-		return errors.Wrapf(err, "cannot write key data to %v", f.Name())
+	if _, err := f.Write(c.Bytes()); err != nil {
+		return errors.Wrapf(err, "cannot write cert pair data to %v", f.Name())
 	}
 	if err := f.Sync(); err != nil {
 		return errors.Wrapf(err, "cannot fsync %v", f.Name())
