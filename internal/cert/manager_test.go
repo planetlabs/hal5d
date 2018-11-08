@@ -23,7 +23,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/negz/hal5d/internal/kubernetes"
+	"github.com/planetlabs/hal5d/internal/kubernetes"
 
 	"github.com/go-test/deep"
 	"github.com/pkg/errors"

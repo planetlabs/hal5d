@@ -24,9 +24,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/negz/hal5d/internal/event"
-	"github.com/negz/hal5d/internal/kubernetes"
-	"github.com/negz/hal5d/internal/metrics"
+	"github.com/planetlabs/hal5d/internal/event"
+	"github.com/planetlabs/hal5d/internal/kubernetes"
+	"github.com/planetlabs/hal5d/internal/metrics"
 
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"

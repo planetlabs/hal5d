@@ -17,7 +17,7 @@ and limitations under the License.
 package event
 
 import (
-	"github.com/negz/hal5d/internal/kubernetes"
+	"github.com/planetlabs/hal5d/internal/kubernetes"
 	"k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/record"
 )

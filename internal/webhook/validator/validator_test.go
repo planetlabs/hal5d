@@ -20,8 +20,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/negz/hal5d/internal/cert"
-	"github.com/negz/hal5d/internal/webhook"
+	"github.com/planetlabs/hal5d/internal/cert"
+	"github.com/planetlabs/hal5d/internal/webhook"
 )
 
 type predictableHook struct {

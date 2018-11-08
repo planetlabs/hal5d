@@ -1,4 +1,4 @@
-package: github.com/negz/hal5d
+package: github.com/planetlabs/hal5d
 import:
 - package: github.com/oklog/run
   version: v1.0.0

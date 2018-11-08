@@ -33,12 +33,12 @@ import (
 	"gopkg.in/alecthomas/kingpin.v2"
 	client "k8s.io/client-go/kubernetes"
 
-	"github.com/negz/hal5d/internal/cert"
-	"github.com/negz/hal5d/internal/event"
-	"github.com/negz/hal5d/internal/kubernetes"
-	"github.com/negz/hal5d/internal/webhook"
-	"github.com/negz/hal5d/internal/webhook/subscriber"
-	"github.com/negz/hal5d/internal/webhook/validator"
+	"github.com/planetlabs/hal5d/internal/cert"
+	"github.com/planetlabs/hal5d/internal/event"
+	"github.com/planetlabs/hal5d/internal/kubernetes"
+	"github.com/planetlabs/hal5d/internal/webhook"
+	"github.com/planetlabs/hal5d/internal/webhook/subscriber"
+	"github.com/planetlabs/hal5d/internal/webhook/validator"
 )
 
 // https://github.com/tuenti/haproxy-docker-wrapper defaults.

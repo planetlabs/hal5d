@@ -17,7 +17,7 @@ and limitations under the License.
 package subscriber
 
 import (
-	"github.com/negz/hal5d/internal/webhook"
+	"github.com/planetlabs/hal5d/internal/webhook"
 
 	"github.com/pkg/errors"
 	"go.uber.org/zap"

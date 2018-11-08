@@ -1,4 +1,4 @@
-# hal5d  [![Godoc](https://img.shields.io/badge/godoc-reference-blue.svg)](https://godoc.org/github.com/negz/hal5d) [![Travis](https://img.shields.io/travis/negz/hal5d.svg?maxAge=300)](https://travis-ci.org/negz/hal5d/) [![Codecov](https://img.shields.io/codecov/c/github/negz/hal5d.svg?maxAge=3600)](https://codecov.io/gh/negz/hal5d/)
+# hal5d  [![Godoc](https://img.shields.io/badge/godoc-reference-blue.svg)](https://godoc.org/github.com/planetlabs/hal5d) [![Travis](https://img.shields.io/travis/negz/hal5d.svg?maxAge=300)](https://travis-ci.org/negz/hal5d/) [![Codecov](https://img.shields.io/codecov/c/github/negz/hal5d.svg?maxAge=3600)](https://codecov.io/gh/negz/hal5d/)
 An haproxy shim for linkerd Kubernetes ingress.
 
 [linkerd](https://linkerd.io/) can be deployed as a

@@ -19,7 +19,7 @@ package validator
 import (
 	"github.com/pkg/errors"
 
-	"github.com/negz/hal5d/internal/webhook"
+	"github.com/planetlabs/hal5d/internal/webhook"
 )
 
 // A Validator wraps a webhook to satisfy cert.Validator.
