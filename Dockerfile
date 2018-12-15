@@ -2,7 +2,7 @@ FROM golang:1.10-alpine3.7 AS build
 
 RUN apk update && apk add git
 
-WORKDIR /go/src/github.com/negz/hal5d
+WORKDIR /go/src/github.com/planetlabs/hal5d
 COPY . .
 
 RUN go get -u github.com/Masterminds/glide

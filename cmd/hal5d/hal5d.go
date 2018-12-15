@@ -1,3 +1,19 @@
+/*
+Copyright 2018 Planet Labs Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+implied. See the License for the specific language governing permissions
+and limitations under the License.
+*/
+
 package main
 
 import (
@@ -17,12 +33,12 @@ import (
 	"gopkg.in/alecthomas/kingpin.v2"
 	client "k8s.io/client-go/kubernetes"
 
-	"github.com/negz/hal5d/internal/cert"
-	"github.com/negz/hal5d/internal/event"
-	"github.com/negz/hal5d/internal/kubernetes"
-	"github.com/negz/hal5d/internal/webhook"
-	"github.com/negz/hal5d/internal/webhook/subscriber"
-	"github.com/negz/hal5d/internal/webhook/validator"
+	"github.com/planetlabs/hal5d/internal/cert"
+	"github.com/planetlabs/hal5d/internal/event"
+	"github.com/planetlabs/hal5d/internal/kubernetes"
+	"github.com/planetlabs/hal5d/internal/webhook"
+	"github.com/planetlabs/hal5d/internal/webhook/subscriber"
+	"github.com/planetlabs/hal5d/internal/webhook/validator"
 )
 
 // https://github.com/tuenti/haproxy-docker-wrapper defaults.
