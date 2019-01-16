@@ -150,7 +150,7 @@ func main() {
 
 	h := &httpRunner{l: *listen, h: map[string]http.Handler{
 		"/metrics": promhttp.Handler(),
-		"/healthz": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { r.Body.Close() }), // nolint:gas
+		"/healthz": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { r.Body.Close() }), // nolint:gas,gosec
 	}}
 
 	kingpin.FatalIfError(await(h, sync, ingresses, secrets), "error watching Kubernetes")
@@ -185,9 +185,9 @@ func (r *httpRunner) Run(stop <-chan struct{}) {
 	ctx, cancel := context.WithTimeout(context.Background(), 0*time.Second)
 	go func() {
 		<-stop
-		s.Shutdown(ctx) // nolint:gas
+		s.Shutdown(ctx) // nolint:gas,gosec
 	}()
-	s.ListenAndServe() // nolint:gas
+	s.ListenAndServe() // nolint:gas,gosec
 	cancel()
 	return
 }

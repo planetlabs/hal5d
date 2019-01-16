@@ -3,5 +3,5 @@
 set -e
 
 VERSION=$(git rev-parse --short HEAD)
-docker push "negz/hal5d:latest"
-docker push "negz/hal5d:${VERSION}"
+docker push "planetlabs/hal5d:latest"
+docker push "planetlabs/hal5d:${VERSION}"

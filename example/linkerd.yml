@@ -466,7 +466,7 @@ spec:
             cpu: 2000m
             memory: 256Mi
       - name: hal5d
-        image: negz/hal5d:c186c1d
+        image: planetlabs/hal5d:c186c1d
         command: ["/hal5d"]
         ports:
         - name: metrics
