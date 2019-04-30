@@ -28,7 +28,7 @@ import (
 	"github.com/go-test/deep"
 	"github.com/pkg/errors"
 	"github.com/spf13/afero"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -37,6 +37,36 @@ var (
 	coolIngress = &v1beta1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "coolIngress"},
 		Spec:       v1beta1.IngressSpec{TLS: []v1beta1.IngressTLS{{SecretName: coolSecret.GetName()}}},
+	}
+	coolIngressWithHTTPAllowed = &v1beta1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   "ns",
+			Name:        "coolIngress",
+			Annotations: map[string]string{},
+		},
+		Spec: v1beta1.IngressSpec{
+			Rules: []v1beta1.IngressRule{
+				v1beta1.IngressRule{Host: "acme.com"},
+				v1beta1.IngressRule{Host: "example.com"},
+			},
+			TLS: []v1beta1.IngressTLS{{SecretName: coolSecret.GetName()}},
+		},
+	}
+	coolIngressWithNoHTTPAllowed = &v1beta1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "ns",
+			Name:      "coolIngress",
+			Annotations: map[string]string{
+				annoAllowHTTP: "false",
+			},
+		},
+		Spec: v1beta1.IngressSpec{
+			Rules: []v1beta1.IngressRule{
+				v1beta1.IngressRule{Host: "acme.com"},
+				v1beta1.IngressRule{Host: "example.com"},
+			},
+			TLS: []v1beta1.IngressTLS{{SecretName: coolSecret.GetName()}},
+		},
 	}
 	coolSecret = &v1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "coolSecret"},
@@ -604,4 +634,86 @@ func TestUpsertDeleteUpsertIngress(t *testing.T) {
 	validate(t, fs, dir, map[string][]byte{
 		"ns-coolIngress-coolSecret.pem": []byte("cert\nkey"),
 	})
+}
+
+func TestAllowHTTP(t *testing.T) {
+	cases := []struct {
+		v    string
+		want bool
+	}{
+		{
+			v:    "false",
+			want: false,
+		},
+		{
+			v:    "true",
+			want: true,
+		},
+		{
+			v:    "",
+			want: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.v, func(t *testing.T) {
+			if allowHTTP(tc.v).IsTrue() != tc.want {
+				t.Fatalf("expected %v to be %v", tc.v, tc.want)
+			}
+		})
+	}
+}
+
+func TestForceHTTPHosts(t *testing.T) {
+	cases := []struct {
+		name string
+		i    *v1beta1.Ingress
+		s    *v1.Secret
+		st   kubernetes.SecretStore
+		want string
+	}{
+		{
+			name: "HTTPAllowEmptyFalse",
+			i:    coolIngressWithNoHTTPAllowed,
+			s:    coolSecret,
+			st: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			},
+			want: "acme.com\nexample.com",
+		},
+		{
+			// When the ingress doesn't specify the value explicitly, we treat allow http as "true".
+			name: "HTTPAllowDefault",
+			i:    coolIngressWithHTTPAllowed,
+			s:    coolSecret,
+			st: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			},
+			want: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+			dir := populate(t, fs, nil)
+
+			st := mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			}
+			sub := &testSubscriber{}
+
+			httpsOnlyHostsFile, err := afero.TempFile(fs, "/https-only", "https-only-hosts")
+			httpsOnlyHostsFileDir := filepath.Dir(httpsOnlyHostsFile.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			m, err := NewManager(dir, st, WithFilesystem(fs), WithSubscriber(sub), WithForceHTTPSHostsFile(httpsOnlyHostsFile.Name()))
+			m.OnAdd(tc.i)
+
+			validate(t, fs, httpsOnlyHostsFileDir, map[string][]byte{
+				filepath.Base(httpsOnlyHostsFile.Name()): []byte(tc.want),
+			})
+		})
+	}
 }

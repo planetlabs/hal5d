@@ -54,14 +54,15 @@ const (
 
 func main() {
 	var (
-		app       = kingpin.New(filepath.Base(os.Args[0]), "Manages an haproxy frontend for linkerd's Kubernetes ingress controller.").DefaultEnvars()
-		debug     = app.Flag("debug", "Run with debug logging.").Short('d').Bool()
-		dir       = app.Flag("tls-dir", "Directory in which TLS certificates are managed.").Default("/tls").String()
-		kubecfg   = app.Flag("kubeconfig", "Path to kubeconfig file. Leave unset to use in-cluster config.").String()
-		apiserver = app.Flag("master", "Address of Kubernetes API server. Leave unset to use in-cluster config.").String()
-		vURL      = app.Flag("validate-url", "Webhook URL used to validate haproxy configuration.").Default(defaultWebhookURLValidate).String()
-		rURL      = app.Flag("reload-url", "Webhook URL used to reload haproxy configuration.").Default(defaultWebhookURLReload).String()
-		listen    = app.Flag("listen", "Address at which to expose /metrics and /healthz.").Default(":10002").String()
+		app                 = kingpin.New(filepath.Base(os.Args[0]), "Manages an haproxy frontend for linkerd's Kubernetes ingress controller.").DefaultEnvars()
+		debug               = app.Flag("debug", "Run with debug logging.").Short('d').Bool()
+		dir                 = app.Flag("tls-dir", "Directory in which TLS certificates are managed.").Default("/tls").String()
+		forceHTTPSHostsFile = app.Flag("force-https-hosts-file", "File in which the forced https host list is managed.").Default("").String()
+		kubecfg             = app.Flag("kubeconfig", "Path to kubeconfig file. Leave unset to use in-cluster config.").String()
+		apiserver           = app.Flag("master", "Address of Kubernetes API server. Leave unset to use in-cluster config.").String()
+		vURL                = app.Flag("validate-url", "Webhook URL used to validate haproxy configuration.").Default(defaultWebhookURLValidate).String()
+		rURL                = app.Flag("reload-url", "Webhook URL used to reload haproxy configuration.").Default(defaultWebhookURLReload).String()
+		listen              = app.Flag("listen", "Address at which to expose /metrics and /healthz.").Default(":10002").String()
 	)
 	kingpin.MustParse(app.Parse(os.Args[1:]))
 	glogWorkaround()
@@ -125,6 +126,17 @@ func main() {
 	s, err := subscriber.New(webhook.New(*rURL), subscriber.WithLogger(log))
 	kingpin.FatalIfError(err, "cannot create reload webhook")
 
+	// Check for the https-only host list. If this file does not exist, and haproxy
+	// is configured to use it, it will report configuration errors given the example
+	// configuration we propose. In order to avoid races in kubernetes, we recommend
+	// using an initContainer to create this file before either container in the pod
+	// starts.
+	if *forceHTTPSHostsFile != "" {
+		if _, err = os.Stat(*forceHTTPSHostsFile); err != nil {
+			kingpin.FatalIfError(err, "cannot open force-https-hosts file")
+		}
+	}
+
 	// This works around the race when a pod running both haproxy and hal5d
 	// starts. If hal5d starts first and writes out some TLS certificates fast
 	// enough they will fail validation due to the haproxy container not being
@@ -141,7 +153,9 @@ func main() {
 		cert.WithEventRecorder(event.NewKubernetesRecorder(e, ingresses)),
 		cert.WithFilesystem(afero.NewOsFs()),
 		cert.WithValidator(v),
-		cert.WithSubscriber(s))
+		cert.WithSubscriber(s),
+		cert.WithForceHTTPSHostsFile(*forceHTTPSHostsFile),
+	)
 	kingpin.FatalIfError(err, "cannot create certificate manager")
 
 	sync := kubernetes.NewSynchronousResourceEventHandler(m, syncEventBuffer)

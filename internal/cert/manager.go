@@ -22,6 +22,7 @@ import (
 	"hash/fnv"
 	"io"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/planetlabs/hal5d/internal/event"
@@ -32,7 +33,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/afero"
 	"go.uber.org/zap"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
 )
 
@@ -42,6 +43,7 @@ const (
 	LabelIngressName = "ingress_name"
 	LabelSecretName  = "secret_name"
 	LabelContext     = "context"
+	LabelAllowHTTP   = "allow_http"
 )
 
 // Error contexts used as metric labels.
@@ -56,6 +58,12 @@ const (
 	certPairSuffix    = ".pem"
 	certPairSeparator = "-"
 	certPairMode      = 0600
+)
+
+const (
+	// Corresponds to GCE Ingress annotation that accomplishes the same thing.
+	// https://cloud.google.com/kubernetes-engine/docs/concepts/ingress#disabling_http
+	annoAllowHTTP = "kubernetes.io/ingress.allow-http"
 )
 
 type errInvalid struct {
@@ -94,6 +102,26 @@ func IsInvalid(err error) bool {
 	}
 }
 
+// collectHosts returns the host names contained within the rules of an ingress resource.
+func collectHosts(i *v1beta1.Ingress) []string {
+	hosts := []string{}
+	for _, r := range i.Spec.Rules {
+		if r.Host != "" {
+			hosts = append(hosts, r.Host)
+		}
+	}
+	return hosts
+}
+
+type allowHTTP string
+
+// IsTrue indicates whether the value of the allow-http annotation is true.
+func (s allowHTTP) IsTrue() bool {
+	// This is quite permissive - any value other than "false" is considered true. Effectively,
+	// this also means that the empty default of "" is true.
+	return strings.ToLower(strings.TrimSpace(string(s))) != "false"
+}
+
 type certPair struct {
 	Namespace   string
 	IngressName string
@@ -123,6 +151,46 @@ type certData struct {
 
 func (c certData) Bytes() []byte {
 	return bytes.Join([][]byte{c.Cert, c.Key}, []byte("\n"))
+}
+
+type forceHTTPSMetadata struct {
+	Hosts      []string
+	ForceHTTPS bool
+}
+type forceHTTPSTable map[metadata]forceHTTPSMetadata
+
+// Bytes returns a line-delimited encoded list of hostnames for which https should be forced.
+func (da forceHTTPSTable) Bytes() []byte {
+	forcedHosts := []string{}
+	for _, m := range da {
+		if m.ForceHTTPS {
+			forcedHosts = append(forcedHosts, m.Hosts...)
+		}
+	}
+	return []byte(strings.Join(forcedHosts, "\n"))
+}
+
+func (da forceHTTPSTable) Delete(namespace, ingressName string) {
+	m := metadata{Namespace: namespace, Name: ingressName}
+	delete(da, m)
+}
+
+// MarkForceHTTPS marks an ingress as HTTPS only and returns whether the setting for that ingress changed.
+func (da forceHTTPSTable) MarkForceHTTPS(namespace, ingressName string, force bool, hosts []string) bool {
+	changed := false
+
+	m := metadata{Namespace: namespace, Name: ingressName}
+	a := forceHTTPSMetadata{
+		Hosts:      hosts,
+		ForceHTTPS: force,
+	}
+
+	if existing, ok := da[m]; !ok || !reflect.DeepEqual(existing, a) {
+		changed = true
+	}
+
+	da[m] = a
+	return changed
 }
 
 type metadata struct {
@@ -192,11 +260,13 @@ type Manager struct {
 	recorder event.Recorder
 	fs       afero.Fs
 
-	tlsDir      string
-	v           Validator
-	secretStore kubernetes.SecretStore
-	secretRefs  secretRefs
-	subscribers []Subscriber
+	tlsDir              string
+	forceHTTPSHostsFile string
+	v                   Validator
+	secretStore         kubernetes.SecretStore
+	secretRefs          secretRefs
+	forceHTTPSTable     forceHTTPSTable
+	subscribers         []Subscriber
 }
 
 // A ManagerOption can be used to configure new certificate managers.
@@ -253,18 +323,28 @@ func WithEventRecorder(r event.Recorder) ManagerOption {
 	}
 }
 
+// WithForceHTTPSHostsFile specifies the location to the file hal5d will manage
+// containing hostnames that should be denied http traffic.
+func WithForceHTTPSHostsFile(forceHTTPSHostsFile string) ManagerOption {
+	return func(m *Manager) error {
+		m.forceHTTPSHostsFile = forceHTTPSHostsFile
+		return nil
+	}
+}
+
 // NewManager creates a new certificate manager.
 func NewManager(dir string, s kubernetes.SecretStore, o ...ManagerOption) (*Manager, error) {
 	m := &Manager{
-		log:         zap.NewNop(),
-		metric:      newNopMetrics(),
-		fs:          afero.NewOsFs(),
-		recorder:    &event.NopRecorder{},
-		tlsDir:      dir,
-		v:           &optimisticValidator{},
-		secretStore: s,
-		secretRefs:  make(map[metadata]map[string]bool),
-		subscribers: make([]Subscriber, 0),
+		log:             zap.NewNop(),
+		metric:          newNopMetrics(),
+		fs:              afero.NewOsFs(),
+		recorder:        &event.NopRecorder{},
+		tlsDir:          dir,
+		v:               &optimisticValidator{},
+		secretStore:     s,
+		secretRefs:      make(map[metadata]map[string]bool),
+		subscribers:     make([]Subscriber, 0),
+		forceHTTPSTable: forceHTTPSTable{},
 	}
 	for _, mo := range o {
 		if err := mo(m); err != nil {
@@ -312,6 +392,17 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 		zap.String(LabelNamespace, i.GetNamespace()),
 		zap.String(LabelIngressName, i.GetName()))
 	log.Debug("processing ingress upsert")
+
+	// We determine whether we should force https based on whether the `allow-http` annotation is false.
+	allowHTTP := allowHTTP(i.GetAnnotations()[annoAllowHTTP]).IsTrue()
+	hosts := collectHosts(i)
+	if m.forceHTTPSTable.MarkForceHTTPS(i.GetNamespace(), i.GetName(), !allowHTTP, hosts) {
+		log.With(zap.Bool(LabelAllowHTTP, allowHTTP)).Debug("configuration change for allowed http endpoints")
+		if err := m.writeForceHTTPSHosts(); err != nil {
+			log.Error("failed to write updated force https host list", zap.Error(err))
+			m.metric.Errors.With(prometheus.Labels{LabelContext: ContextUpsertIngress}).Inc()
+		}
+	}
 
 	existing, err := m.existing(i.GetNamespace(), i.GetName())
 	if err != nil {
@@ -420,6 +511,30 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 	}
 
 	return changed
+}
+
+func (m *Manager) writeForceHTTPSHosts() error {
+	if m.forceHTTPSHostsFile == "" {
+		m.log.Debug("no force https hosts file specified, skipping")
+		return nil
+	}
+
+	f, err := afero.TempFile(m.fs, filepath.Dir(m.forceHTTPSHostsFile), "https-only-tempfile")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	defer m.fs.Remove(f.Name())
+
+	if _, err := f.Write(m.forceHTTPSTable.Bytes()); err != nil {
+		return errors.Wrapf(err, "cannot write %v", f.Name())
+	}
+
+	if err := f.Sync(); err != nil {
+		return errors.Wrapf(err, "cannot fsync %v", f.Name())
+	}
+
+	return errors.Wrapf(m.fs.Rename(f.Name(), m.forceHTTPSHostsFile), "cannot move %v to %v", f.Name(), m.forceHTTPSHostsFile)
 }
 
 func (m *Manager) changed(c certData) bool {
@@ -542,6 +657,8 @@ func (m *Manager) deleteIngress(i *v1beta1.Ingress) bool {
 		zap.String(LabelNamespace, i.GetNamespace()),
 		zap.String(LabelIngressName, i.GetName()))
 	log.Debug("processing ingress delete")
+
+	m.forceHTTPSTable.Delete(i.GetNamespace(), i.GetName())
 
 	changed := false
 	existing, err := m.existing(i.GetNamespace(), i.GetName())

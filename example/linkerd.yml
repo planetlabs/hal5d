@@ -364,6 +364,15 @@ data:
     frontend http
       bind :80
       bind :443 ssl crt /etc/kubernetes/tls-ingress-fallback.combined crt /tls alpn h2,http/1.1
+      # hal5d can manage a list of hosts which disallow http with the
+      # `--force-https-hosts` flag. Here we set it to /hal5d-shared/force-https-hosts.lst
+      # which should be on a volume shared between hal5d and
+      # haproxy-docker-wrapper.
+      acl is_forced_https hdr(host) -i -f /hal5d-shared/force-https-hosts.lst
+      acl is_forced_https hdr(x-forwarded-host) -i -f /hal5d-shared/force-https-hosts.lst
+      http-request deny if !{ ssl_fc } is_forced_https
+      redirect scheme https code 301 if ! { ssl_fc } AND http_disallowed
+
       default_backend linkerd_http
 
     backend linkerd_http
@@ -409,8 +418,19 @@ spec:
       - name: tls
         emptyDir:
           medium: Memory
+      - name: hal5d-shared
+        emptyDir:
+          medium: Memory
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
+      initContainers:
+      - name: initialize-force-https
+        image: busybox
+        command: ["touch", "/hal5d-shared/force-https-hosts.lst"]
+        volumeMounts:
+        - name: hal5d-shared
+          mountPath: "/hal5d-shared"
+          readOnly: false
       containers:
       - name: haproxy
         # You'll need a version of haproxy-docker-wrapper that includes
@@ -446,6 +466,9 @@ spec:
         - name: "tls"
           mountPath: "/tls"
           readOnly: true
+        - name: "hal5d-shared"
+          mountPath: "/hal5d-shared"
+          readOnly: true
         readinessProbe:
           httpGet:
             path: /health
@@ -466,8 +489,8 @@ spec:
             cpu: 2000m
             memory: 256Mi
       - name: hal5d
-        image: planetlabs/hal5d:c186c1d
-        command: ["/hal5d"]
+        image: planetlabs/hal5d:df5db94
+        command: ["/hal5d", "--force-https-hosts-file", "/hal5d-shared/force-https-hosts.lst"]
         ports:
         - name: metrics
           containerPort: 10002
@@ -487,3 +510,5 @@ spec:
         volumeMounts:
         - name: "tls"
           mountPath: "/tls"
+        - name: "hal5d-shared"
+          mountPath: "/hal5d-shared"
