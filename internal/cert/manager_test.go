@@ -665,30 +665,48 @@ func TestAllowHTTP(t *testing.T) {
 
 func TestForceHTTPHosts(t *testing.T) {
 	cases := []struct {
-		name string
-		i    *v1beta1.Ingress
-		s    *v1.Secret
-		st   kubernetes.SecretStore
-		want string
+		name         string
+		i            *v1beta1.Ingress
+		iu           *v1beta1.Ingress
+		s            *v1.Secret
+		st           kubernetes.SecretStore
+		want         string
+		wantNotified int
 	}{
 		{
 			name: "HTTPAllowEmptyFalse",
 			i:    coolIngressWithNoHTTPAllowed,
+			iu:   coolIngressWithNoHTTPAllowed,
 			s:    coolSecret,
 			st: mapSecretStore{
 				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
 			},
-			want: "acme.com\nexample.com",
+			want:         "acme.com\nexample.com",
+			wantNotified: 1,
 		},
 		{
 			// When the ingress doesn't specify the value explicitly, we treat allow http as "true".
 			name: "HTTPAllowDefault",
 			i:    coolIngressWithHTTPAllowed,
+			iu:   coolIngressWithHTTPAllowed,
 			s:    coolSecret,
 			st: mapSecretStore{
 				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
 			},
-			want: "",
+			want:         "",
+			wantNotified: 1,
+		},
+		{
+			// An ingress has the annotation toggled from unset, to allow-http: false.
+			name: "HTTPAllowDefault to HTTPNotAllowed",
+			i:    coolIngressWithHTTPAllowed,
+			iu:   coolIngressWithNoHTTPAllowed,
+			s:    coolSecret,
+			st: mapSecretStore{
+				metadata{Namespace: coolSecret.GetNamespace(), Name: coolSecret.GetName()}: coolSecret,
+			},
+			want:         "acme.com\nexample.com",
+			wantNotified: 2,
 		},
 	}
 
@@ -710,6 +728,11 @@ func TestForceHTTPHosts(t *testing.T) {
 
 			m, err := NewManager(dir, st, WithFilesystem(fs), WithSubscriber(sub), WithForceHTTPSHostsFile(httpsOnlyHostsFile.Name()))
 			m.OnAdd(tc.i)
+			m.OnAdd(tc.iu)
+
+			if tc.wantNotified != sub.notified {
+				t.Fatalf("m.OnUpdate(): expected to be notified %v time(s), notified %v time(s)", tc.wantNotified, sub.notified)
+			}
 
 			validate(t, fs, httpsOnlyHostsFileDir, map[string][]byte{
 				filepath.Base(httpsOnlyHostsFile.Name()): []byte(tc.want),
