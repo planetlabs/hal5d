@@ -104,7 +104,7 @@ func IsInvalid(err error) bool {
 
 // collectHosts returns the host names contained within the rules of an ingress resource.
 func collectHosts(i *v1beta1.Ingress) []string {
-	hosts := []string{}
+	hosts := []string(nil)
 	for _, r := range i.Spec.Rules {
 		if r.Host != "" {
 			hosts = append(hosts, r.Host)
@@ -185,7 +185,7 @@ func (da forceHTTPSTable) MarkForceHTTPS(namespace, ingressName string, force bo
 		ForceHTTPS: force,
 	}
 
-	if existing, ok := da[m]; !ok || !reflect.DeepEqual(existing, a) {
+	if existing := da[m]; !reflect.DeepEqual(existing, a) {
 		changed = true
 	}
 
@@ -393,10 +393,13 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 		zap.String(LabelIngressName, i.GetName()))
 	log.Debug("processing ingress upsert")
 
+	changed := false
+
 	// We determine whether we should force https based on whether the `allow-http` annotation is false.
 	allowHTTP := allowHTTP(i.GetAnnotations()[annoAllowHTTP]).IsTrue()
 	hosts := collectHosts(i)
 	if m.forceHTTPSTable.MarkForceHTTPS(i.GetNamespace(), i.GetName(), !allowHTTP, hosts) {
+		changed = true
 		log.With(zap.Bool(LabelAllowHTTP, allowHTTP)).Debug("configuration change for allowed http endpoints")
 		if err := m.writeForceHTTPSHosts(); err != nil {
 			log.Error("failed to write updated force https host list", zap.Error(err))
@@ -410,7 +413,6 @@ func (m *Manager) upsertIngress(i *v1beta1.Ingress) bool { // nolint:gocyclo
 		m.metric.Errors.With(prometheus.Labels{LabelContext: ContextUpsertIngress}).Inc()
 	}
 
-	changed := false
 	keep := make(map[certPair]bool)
 	for _, tls := range i.Spec.TLS {
 		log := log.With(zap.String(LabelSecretName, tls.SecretName)) //nolint:vetshadow
